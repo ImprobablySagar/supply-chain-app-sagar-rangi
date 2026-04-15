@@ -831,6 +831,24 @@ def create_excel_template():
 # ═══════════════════════════════════════════════════════════════
 # VISUALIZATIONS
 # ═══════════════════════════════════════════════════════════════
+# ── Performance: graph hash for cache invalidation ──────────────────
+def _graph_hash(sc):
+    """Cheap fingerprint: node count + edge count + sum of capacities"""
+    return hash((len(sc.nodes), len(sc.edges),
+                 sum(e.capacity for e in sc.edges),
+                 sum(n.capacity for n in sc.nodes.values())))
+
+def get_fulfillment_cached(sc):
+    """Return cached demand fulfillment; recompute only when graph changes"""
+    h = _graph_hash(sc)
+    if (st.session_state.get("_ff_hash") == h and
+            st.session_state.get("_ff_cache") is not None):
+        return st.session_state["_ff_cache"]
+    result = sc.demand_fulfillment()
+    st.session_state["_ff_cache"] = result
+    st.session_state["_ff_hash"]  = h
+    return result
+
 NC={"plant":"#0F6E56","warehouse":"#185FA5","demand":"#993C1D"}
 NS={"plant":"square","warehouse":"diamond","demand":"circle"}
 SEV={"critical":"#E74C3C","high":"#E67E22","medium":"#3498DB","low":"#27AE60","none":"#95A5A6"}
@@ -858,6 +876,7 @@ def draw_network(sc, highlight_path=None, disrupted_edge=None, show_cap=True, in
     pos=_auto_layout(sc); hp=highlight_path or []; it=in_transit or []
     hp_set=set(zip(hp,hp[1:])) if len(hp)>1 else set()
     it_edges={(d.get("from_id",""),d.get("to_id","")) for d in it if d.get("status")=="In Transit"}
+    large_graph = len(sc.edges) > 60  # skip arrows and cap labels for big graphs
     traces=[]
     for e in sc.edges:
         x0,y0=pos[e.source]; x1,y1=pos[e.target]
@@ -869,16 +888,17 @@ def draw_network(sc, highlight_path=None, disrupted_edge=None, show_cap=True, in
         ht=f"<b>{sc.nodes[e.source].name} → {sc.nodes[e.target].name}</b><br>Capacity: {e.capacity} | Cost: {e.cost}"
         traces.append(go.Scatter(x=[x0,x1,None],y=[y0,y1,None],mode="lines",
             line=dict(color=col,width=w,dash=dash),hovertext=ht,hoverinfo="text",showlegend=False))
-        if show_cap:
+        if show_cap and not large_graph:
             mx,my=(x0+x1)/2,(y0+y1)/2
             traces.append(go.Scatter(x=[mx],y=[my],mode="text",text=[f"{int(e.capacity)}"],
                 textfont=dict(size=9,color=col),showlegend=False,hoverinfo="skip"))
-        dx,dy=x1-x0,y1-y0; L=math.hypot(dx,dy)
-        if L>0:
-            ux,uy=dx/L,dy/L
-            traces.append(go.Scatter(x=[x1-ux*0.07],y=[y1-uy*0.07],mode="markers",
-                marker=dict(symbol="arrow",size=10,color=col,angle=math.degrees(math.atan2(-dy,dx))+90),
-                showlegend=False,hoverinfo="skip"))
+        if not large_graph:
+            dx,dy=x1-x0,y1-y0; L=math.hypot(dx,dy)
+            if L>0:
+                ux,uy=dx/L,dy/L
+                traces.append(go.Scatter(x=[x1-ux*0.07],y=[y1-uy*0.07],mode="markers",
+                    marker=dict(symbol="arrow",size=10,color=col,angle=math.degrees(math.atan2(-dy,dx))+90),
+                    showlegend=False,hoverinfo="skip"))
     for ntype in ["plant","warehouse","demand"]:
         nids=[n for n,nd in sc.nodes.items() if nd.node_type==ntype]
         if not nids: continue
@@ -2152,6 +2172,24 @@ def create_excel_template():
 # ═══════════════════════════════════════════════════════════════
 # VISUALIZATIONS
 # ═══════════════════════════════════════════════════════════════
+# ── Performance: graph hash for cache invalidation ──────────────────
+def _graph_hash(sc):
+    """Cheap fingerprint: node count + edge count + sum of capacities"""
+    return hash((len(sc.nodes), len(sc.edges),
+                 sum(e.capacity for e in sc.edges),
+                 sum(n.capacity for n in sc.nodes.values())))
+
+def get_fulfillment_cached(sc):
+    """Return cached demand fulfillment; recompute only when graph changes"""
+    h = _graph_hash(sc)
+    if (st.session_state.get("_ff_hash") == h and
+            st.session_state.get("_ff_cache") is not None):
+        return st.session_state["_ff_cache"]
+    result = sc.demand_fulfillment()
+    st.session_state["_ff_cache"] = result
+    st.session_state["_ff_hash"]  = h
+    return result
+
 NC={"plant":"#0F6E56","warehouse":"#185FA5","demand":"#993C1D"}
 NS={"plant":"square","warehouse":"diamond","demand":"circle"}
 SEV={"critical":"#E74C3C","high":"#E67E22","medium":"#3498DB","low":"#27AE60","none":"#95A5A6"}
@@ -2179,6 +2217,7 @@ def draw_network(sc, highlight_path=None, disrupted_edge=None, show_cap=True, in
     pos=_auto_layout(sc); hp=highlight_path or []; it=in_transit or []
     hp_set=set(zip(hp,hp[1:])) if len(hp)>1 else set()
     it_edges={(d.get("from_id",""),d.get("to_id","")) for d in it if d.get("status")=="In Transit"}
+    large_graph = len(sc.edges) > 60  # skip arrows and cap labels for big graphs
     traces=[]
     for e in sc.edges:
         x0,y0=pos[e.source]; x1,y1=pos[e.target]
@@ -2190,16 +2229,17 @@ def draw_network(sc, highlight_path=None, disrupted_edge=None, show_cap=True, in
         ht=f"<b>{sc.nodes[e.source].name} → {sc.nodes[e.target].name}</b><br>Capacity: {e.capacity} | Cost: {e.cost}"
         traces.append(go.Scatter(x=[x0,x1,None],y=[y0,y1,None],mode="lines",
             line=dict(color=col,width=w,dash=dash),hovertext=ht,hoverinfo="text",showlegend=False))
-        if show_cap:
+        if show_cap and not large_graph:
             mx,my=(x0+x1)/2,(y0+y1)/2
             traces.append(go.Scatter(x=[mx],y=[my],mode="text",text=[f"{int(e.capacity)}"],
                 textfont=dict(size=9,color=col),showlegend=False,hoverinfo="skip"))
-        dx,dy=x1-x0,y1-y0; L=math.hypot(dx,dy)
-        if L>0:
-            ux,uy=dx/L,dy/L
-            traces.append(go.Scatter(x=[x1-ux*0.07],y=[y1-uy*0.07],mode="markers",
-                marker=dict(symbol="arrow",size=10,color=col,angle=math.degrees(math.atan2(-dy,dx))+90),
-                showlegend=False,hoverinfo="skip"))
+        if not large_graph:
+            dx,dy=x1-x0,y1-y0; L=math.hypot(dx,dy)
+            if L>0:
+                ux,uy=dx/L,dy/L
+                traces.append(go.Scatter(x=[x1-ux*0.07],y=[y1-uy*0.07],mode="markers",
+                    marker=dict(symbol="arrow",size=10,color=col,angle=math.degrees(math.atan2(-dy,dx))+90),
+                    showlegend=False,hoverinfo="skip"))
     for ntype in ["plant","warehouse","demand"]:
         nids=[n for n,nd in sc.nodes.items() if nd.node_type==ntype]
         if not nids: continue
@@ -2581,15 +2621,37 @@ for k,v in [("sc",None),("inv",None),("scores",None),("dispatch_log",[]),
             ("disruption_result",None),("highlight_path",[]),("disrupted_edge",None),
             ("ranking",None),("forecaster",None),("forecast_trained",set()),
             ("chat_history",[]),("ai_key",""),("ai_model",list(FREE_AI_MODELS.keys())[0]),
-            ("last_ai_text",""),("wh_forecasts",None),("plant_req",None)]:
+            ("last_ai_text",""),("wh_forecasts",None),("plant_req",None),
+            ("user_data_loaded", False),
+            ("_ff_cache", None), ("_ff_hash", None)]:
     if k not in st.session_state: st.session_state[k]=v
 
-if st.session_state.sc is None:     st.session_state.sc=load_demo_data()
-if st.session_state.inv is None:    st.session_state.inv=load_demo_inventory()
-if st.session_state.scores is None: st.session_state.scores=load_demo_scores()
+# Only load demo if user has NOT uploaded their own data
+if not st.session_state.user_data_loaded:
+    if st.session_state.sc is None:     st.session_state.sc=load_demo_data()
+    if st.session_state.inv is None:    st.session_state.inv=load_demo_inventory()
+    if st.session_state.scores is None: st.session_state.scores=load_demo_scores()
 if st.session_state.forecaster is None: st.session_state.forecaster=DemandForecaster()
 
 sc=st.session_state.sc; inv=st.session_state.inv
+
+# ── Active dataset banner ────────────────────────────────
+if st.session_state.get("user_data_loaded", False):
+    _n=len(sc.nodes); _e=len(sc.edges)
+    _fc_nodes=len(st.session_state.forecaster.history) if st.session_state.forecaster else 0
+    st.markdown(
+        f'<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;'
+        f'padding:8px 16px;margin-bottom:14px;font-size:12px;color:#14532D;font-weight:500;">'
+        f'Active dataset: <b>{_n} nodes</b> &nbsp;·&nbsp; <b>{_e} connections</b>'
+        f'{f" &nbsp;·&nbsp; <b>{_fc_nodes} demand histories</b>" if _fc_nodes else ""}'
+        f' &nbsp;·&nbsp; <span style="color:#15803D">Your uploaded data is active</span></div>',
+        unsafe_allow_html=True)
+else:
+    st.markdown(
+        '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;'
+        'padding:8px 16px;margin-bottom:14px;font-size:12px;color:#92400E;font-weight:500;">'
+        'Demo data is active. Upload your dataset via <b>Sidebar &rarr; Data &rarr; Import</b> to use your own supply chain.</div>',
+        unsafe_allow_html=True)
 
 # ── HEADER ──────────────────────────────────────────────────────
 st.markdown(f"""
@@ -2668,6 +2730,9 @@ with st.sidebar:
         if st.button(" Load Demo Supply Chain",use_container_width=True):
             for k in ["sc","inv","scores","disruption_result","highlight_path","disrupted_edge","ranking","forecaster","forecast_trained","dispatch_log","wh_forecasts","plant_req"]:
                 st.session_state[k]=(load_demo_data() if k=="sc" else load_demo_inventory() if k=="inv" else load_demo_scores() if k=="scores" else DemandForecaster() if k=="forecaster" else set() if k=="forecast_trained" else [] if k=="dispatch_log" else None)
+            st.session_state.user_data_loaded=False
+            st.session_state._ff_cache=None
+            st.session_state._ff_hash=None
             st.rerun()
 
         st.markdown('<div class="sb-sec">Download Templates</div>', unsafe_allow_html=True)
@@ -2683,29 +2748,90 @@ with st.sidebar:
             fn=uf.name.lower()
             try:
                 if fn.endswith((".xlsx",".xls")):
-                    xls=pd.ExcelFile(uf); nsc=SupplyChainGraph()
+                    _prog = st.progress(0, text="Reading file...")
+                    xls = pd.ExcelFile(uf)
+                    nsc = SupplyChainGraph()
+
+                    # Sheet 1: Nodes
                     if "Nodes" in xls.sheet_names:
-                        for _,r in pd.read_excel(xls,"Nodes").iterrows():
-                            nsc.add_node(Node(str(r["id"]),str(r["name"]),str(r["node_type"]),float(r["capacity"]),
-                                str(r.get("location","")),float(r.get("x_longitude",0)),float(r.get("y_latitude",0))))
+                        _prog.progress(10, text="Loading nodes...")
+                        ndf_raw = pd.read_excel(xls, "Nodes")
+                        for _, r in ndf_raw.iterrows():
+                            try:
+                                nsc.add_node(Node(str(r["id"]),str(r["name"]),str(r["node_type"]),
+                                    float(r["capacity"]),str(r.get("location","")),
+                                    float(r.get("x_longitude",0)),float(r.get("y_latitude",0))))
+                            except: pass
+
+                    # Sheet 2: Connections
                     if "Connections" in xls.sheet_names:
-                        for _,r in pd.read_excel(xls,"Connections").iterrows():
-                            nsc.add_edge(Edge(str(r["source"]),str(r["target"]),float(r["capacity"]),float(r.get("cost",1.0))))
-                    ni=InventoryManager()
+                        _prog.progress(30, text="Loading connections...")
+                        edf_raw = pd.read_excel(xls, "Connections")
+                        for _, r in edf_raw.iterrows():
+                            try:
+                                nsc.add_edge(Edge(str(r["source"]),str(r["target"]),
+                                    float(r["capacity"]),float(r.get("cost",1.0))))
+                            except: pass
+
+                    # Sheet 3: Inventory
+                    ni = InventoryManager()
                     if "Inventory" in xls.sheet_names:
-                        for _,r in pd.read_excel(xls,"Inventory").iterrows():
-                            iid=str(r["item_id"])
-                            if iid not in ni.items: ni.add_item(iid,str(r.get("item_name",iid)),str(r.get("unit","units")))
-                            ni.set_stock(str(r["node_id"]),iid,float(r["current_stock"]),float(r["safety_stock"]),float(r["reorder_point"]),float(r.get("daily_demand",1)))
-                    fc=DemandForecaster()
+                        _prog.progress(50, text="Loading inventory...")
+                        idf_raw = pd.read_excel(xls, "Inventory")
+                        for _, r in idf_raw.iterrows():
+                            try:
+                                iid = str(r["item_id"])
+                                if iid not in ni.items:
+                                    ni.add_item(iid, str(r.get("item_name",iid)), str(r.get("unit","units")))
+                                ni.set_stock(str(r["node_id"]),iid,float(r["current_stock"]),
+                                    float(r["safety_stock"]),float(r["reorder_point"]),
+                                    float(r.get("daily_demand",1)))
+                            except: pass
+
+                    # Sheet 4: Historical Demand (large — read efficiently)
+                    fc = DemandForecaster()
                     if "Historical_Demand" in xls.sheet_names:
-                        hdf=pd.read_excel(xls,"Historical_Demand"); hdf["date"]=pd.to_datetime(hdf["date"])
-                        for nid in hdf["node_id"].unique():
-                            sub=hdf[hdf["node_id"]==nid].sort_values("date").reset_index(drop=True)
-                            nn2=nsc.nodes[nid].name if nid in nsc.nodes else nid
-                            sub["node_name"]=nn2; fc.history[nid]=sub
-                    st.session_state.sc=nsc; st.session_state.inv=ni; st.session_state.forecaster=fc
-                    st.success("Import successful."); st.rerun()
+                        _prog.progress(65, text="Loading historical demand (this may take a moment)...")
+                        # Use dtype spec for speed
+                        hdf = pd.read_excel(xls, "Historical_Demand",
+                                            dtype={"node_id":str,"demand":float})
+                        hdf["date"] = pd.to_datetime(hdf["date"])
+                        _prog.progress(80, text="Indexing demand history...")
+                        for nid, grp in hdf.groupby("node_id"):
+                            grp2 = grp.sort_values("date").reset_index(drop=True).copy()
+                            nn2  = nsc.nodes[nid].name if nid in nsc.nodes else str(nid)
+                            grp2["node_name"] = nn2
+                            fc.history[nid] = grp2
+
+                    # Sheet 5: Items (optional)
+                    if "Items" in xls.sheet_names:
+                        iraw = pd.read_excel(xls, "Items")
+                        for _, r in iraw.iterrows():
+                            try:
+                                iid = str(r.get("item_id",""))
+                                if iid and iid not in ni.items:
+                                    ni.add_item(iid, str(r.get("item_name",iid)), str(r.get("unit","units")))
+                            except: pass
+
+                    _prog.progress(95, text="Finalising...")
+                    st.session_state.sc = nsc
+                    st.session_state.inv = ni
+                    st.session_state.forecaster = fc
+                    st.session_state.scores = load_demo_scores()  # init scores for new nodes
+                    st.session_state.user_data_loaded = True
+                    st.session_state.ranking = None
+                    st.session_state._ff_cache = None
+                    st.session_state._ff_hash  = None
+                    st.session_state.dispatch_log = []
+                    st.session_state.highlight_path = []
+                    st.session_state.disrupted_edge = None
+                    st.session_state.disruption_result = None
+                    _prog.progress(100, text="Done.")
+                    _prog.empty()
+                    n_nodes=len(nsc.nodes); n_edges=len(nsc.edges)
+                    n_hist=sum(len(v) for v in fc.history.values())
+                    st.success(f"Import complete: {n_nodes} nodes, {n_edges} connections, {n_hist:,} demand records. Your data is active.")
+                    st.rerun()
                 else:
                     df=pd.read_csv(uf)
                     if "node_type" in df.columns:
@@ -2847,18 +2973,29 @@ with t1:
             if st.button("Clear path",key="clear_path"): st.session_state.highlight_path=[]; del st.session_state["last_path_result"]; st.rerun()
 
         st.markdown("<br>",unsafe_allow_html=True)
-        st.markdown('<div class="sh">Current Demand Fulfillment</div>',unsafe_allow_html=True)
+        st.markdown('<div class="sh">Demand Fulfillment</div>',unsafe_allow_html=True)
         if sc.edges:
-            with st.spinner("Computing fulfillment..."): ff=sc.demand_fulfillment()
-            st.plotly_chart(draw_gauge_charts(ff,sc.nodes),use_container_width=True)
-            with st.expander(" **View Detailed Table**"):
+            _ff_col1, _ff_col2 = st.columns([3,1])
+            _ff_col1.caption(f"Computes max-flow from all plants to all {len([n for n in sc.nodes.values() if n.node_type=='demand'])} demand points.")
+            if _ff_col2.button("Compute Fulfillment", key="ff_btn", use_container_width=True):
+                with st.spinner("Computing..."):
+                    ff=sc.demand_fulfillment()
+                    st.session_state._ff_cache=ff
+                    st.session_state._ff_hash=_graph_hash(sc)
+            ff = st.session_state.get("_ff_cache")
+            if ff:
+                st.plotly_chart(draw_gauge_charts(ff,sc.nodes),use_container_width=True)
+            else:
+                st.info("Click **Compute Fulfillment** to analyse supply vs demand across your network.")
+            if ff:
+              with st.expander("View Detailed Table"):
                 rows=[{"Demand Point":sc.nodes[d].name,"Required":info["required"],"Fulfilled":info["fulfilled"],
                        "Fulfillment %":info["pct"],"Sources":", ".join(sc.nodes[p].name for p in info["reachable_from"]) or "None"}
                       for d,info in ff.items()]
                 df_ff=pd.DataFrame(rows)
-                def cpct(v): return "background-color:#D5F5E3" if v>=90 else "background-color:#FDEBD0" if v>=50 else "background-color:#FADBD8"
+                def cpct(v): return "background-color:#DCFCE7" if v>=90 else "background-color:#FEF3C7" if v>=50 else "background-color:#FEE2E2"
                 st.dataframe(df_ff.style.map(cpct,subset=["Fulfillment %"]),use_container_width=True,hide_index=True)
-        else: st.info("Add connections to compute demand fulfillment.")
+        if not sc.edges: st.info("Add connections to compute demand fulfillment.")
 
 
 # ─────────────────────────────────────────────────────────────
