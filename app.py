@@ -714,7 +714,7 @@ def generate_excel_report(sc, inv, forecaster, ranking, start_date, end_date):
     hdr6a=["Demand Point","Mean Demand","Std Dev","VaR 95%","CVaR 95%","Risk Level"]
     for c,h in enumerate(hdr6a,1): ws6.cell(row=4,column=c,value=h)
     hdr_row(ws6,4,len(hdr6a))
-    ff2=sc.demand_fulfillment(); r6=5
+    ff2 = get_fulfillment_cached(sc); r6=5
     for did,info in ff2.items():
         node=sc.nodes[did]; base=node.capacity; std_d=base*0.15
         var95=round(base+1.645*std_d,1); cvar95=round(base+2.0*std_d,1)
@@ -2055,7 +2055,7 @@ def generate_excel_report(sc, inv, forecaster, ranking, start_date, end_date):
     hdr6a=["Demand Point","Mean Demand","Std Dev","VaR 95%","CVaR 95%","Risk Level"]
     for c,h in enumerate(hdr6a,1): ws6.cell(row=4,column=c,value=h)
     hdr_row(ws6,4,len(hdr6a))
-    ff2=sc.demand_fulfillment(); r6=5
+    ff2 = get_fulfillment_cached(sc); r6=5
     for did,info in ff2.items():
         node=sc.nodes[did]; base=node.capacity; std_d=base*0.15
         var95=round(base+1.645*std_d,1); cvar95=round(base+2.0*std_d,1)
@@ -2622,11 +2622,34 @@ for k,v in [("sc",None),("inv",None),("scores",None),("dispatch_log",[]),
             ("ranking",None),("forecaster",None),("forecast_trained",set()),
             ("chat_history",[]),("ai_key",""),("ai_model",list(FREE_AI_MODELS.keys())[0]),
             ("last_ai_text",""),("wh_forecasts",None),("plant_req",None),
-            ("user_data_loaded", False),
-            ("_ff_cache", None), ("_ff_hash", None)]:
+            ("user_data_loaded", False), ("ls_restore_attempted", False),
+            ("_ff_cache", None), ("_ff_hash", None),
+            ("_pending_save", False), ("_save_payload", None)]:
     if k not in st.session_state: st.session_state[k]=v
 
-# Only load demo if user has NOT uploaded their own data
+# ── Restore from localStorage on first load ───────────────────
+if not st.session_state.ls_restore_attempted:
+    st.session_state.ls_restore_attempted = True
+    # Try query-param based restore (set by JS on previous session)
+    qp = st.query_params.get("_ls", None)
+    if qp:
+        try:
+            import urllib.parse as _ul
+            payload_str = _ul.unquote(qp)
+            result = _restore_from_payload(payload_str)
+            if result:
+                sc_r, inv_r, scores_r, dispatch_r = result
+                st.session_state.sc = sc_r
+                st.session_state.inv = inv_r
+                st.session_state.scores = scores_r
+                st.session_state.dispatch_log = dispatch_r
+                st.session_state.user_data_loaded = True
+                st.session_state.forecaster = DemandForecaster()
+                # Clear the query param after restore
+                st.query_params.clear()
+        except: pass
+
+# ── Fall back to demo if nothing loaded ───────────────────────
 if not st.session_state.user_data_loaded:
     if st.session_state.sc is None:     st.session_state.sc=load_demo_data()
     if st.session_state.inv is None:    st.session_state.inv=load_demo_inventory()
@@ -2635,22 +2658,38 @@ if st.session_state.forecaster is None: st.session_state.forecaster=DemandForeca
 
 sc=st.session_state.sc; inv=st.session_state.inv
 
+# ── Auto-save to localStorage on every render ─────────────────
+_save_json = _build_save_payload(
+    sc, inv,
+    st.session_state.scores,
+    st.session_state.dispatch_log
+)
+if _save_json:
+    # Write save script (runs in browser, invisible)
+    _save_html = make_save_component(_save_json)
+    components.html(_save_html, height=0, scrolling=False)
+
 # ── Active dataset banner ────────────────────────────────
 if st.session_state.get("user_data_loaded", False):
     _n=len(sc.nodes); _e=len(sc.edges)
     _fc_nodes=len(st.session_state.forecaster.history) if st.session_state.forecaster else 0
+    _disp_c=len(st.session_state.dispatch_log or [])
     st.markdown(
         f'<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;'
-        f'padding:8px 16px;margin-bottom:14px;font-size:12px;color:#14532D;font-weight:500;">'
-        f'Active dataset: <b>{_n} nodes</b> &nbsp;·&nbsp; <b>{_e} connections</b>'
-        f'{f" &nbsp;·&nbsp; <b>{_fc_nodes} demand histories</b>" if _fc_nodes else ""}'
-        f' &nbsp;·&nbsp; <span style="color:#15803D">Your uploaded data is active</span></div>',
+        f'padding:9px 18px;margin-bottom:14px;font-size:12px;color:#14532D;'
+        f'display:flex;align-items:center;justify-content:space-between;">'
+        f'<span><b>Your dataset is active</b> &nbsp;·&nbsp; {_n} nodes &nbsp;·&nbsp; {_e} connections'
+        f'{f" &nbsp;·&nbsp; {_fc_nodes} demand histories" if _fc_nodes else ""}'
+        f'{f" &nbsp;·&nbsp; {_disp_c} dispatches" if _disp_c else ""}</span>'
+        f'<span style="color:#15803D;font-size:11px;font-weight:600;">Saved in browser</span>'
+        f'</div>',
         unsafe_allow_html=True)
 else:
     st.markdown(
         '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;'
-        'padding:8px 16px;margin-bottom:14px;font-size:12px;color:#92400E;font-weight:500;">'
-        'Demo data is active. Upload your dataset via <b>Sidebar &rarr; Data &rarr; Import</b> to use your own supply chain.</div>',
+        'padding:9px 18px;margin-bottom:14px;font-size:12px;color:#92400E;">'
+        '<b>Demo data active.</b> Upload your own dataset via Sidebar &rarr; Data &rarr; Import Data. '
+        'Once uploaded, your data is saved and reloads automatically.</div>',
         unsafe_allow_html=True)
 
 # ── HEADER ──────────────────────────────────────────────────────
@@ -2748,89 +2787,141 @@ with st.sidebar:
             fn=uf.name.lower()
             try:
                 if fn.endswith((".xlsx",".xls")):
-                    _prog = st.progress(0, text="Reading file...")
-                    xls = pd.ExcelFile(uf)
+                    _prog = st.progress(0, text="Opening file...")
+                    import io as _io_inner
+                    raw_bytes = uf.read()  # read once into memory
+
+                    try:
+                        xls = pd.ExcelFile(_io_inner.BytesIO(raw_bytes))
+                    except Exception as ex:
+                        st.error(f"Cannot read file: {ex}")
+                        _prog.empty()
+                        st.stop()
+
+                    sheets = xls.sheet_names
                     nsc = SupplyChainGraph()
 
-                    # Sheet 1: Nodes
-                    if "Nodes" in xls.sheet_names:
-                        _prog.progress(10, text="Loading nodes...")
-                        ndf_raw = pd.read_excel(xls, "Nodes")
-                        for _, r in ndf_raw.iterrows():
-                            try:
-                                nsc.add_node(Node(str(r["id"]),str(r["name"]),str(r["node_type"]),
-                                    float(r["capacity"]),str(r.get("location","")),
-                                    float(r.get("x_longitude",0)),float(r.get("y_latitude",0))))
-                            except: pass
+                    # ── Nodes (vectorized) ────────────────────────────────
+                    if "Nodes" in sheets:
+                        _prog.progress(15, text=f"Loading nodes...")
+                        try:
+                            ndf = pd.read_excel(xls,"Nodes",
+                                dtype={"id":str,"name":str,"node_type":str,
+                                       "capacity":float,"location":str,
+                                       "x_longitude":float,"y_latitude":float})
+                            ndf["x_longitude"] = pd.to_numeric(ndf.get("x_longitude",0), errors="coerce").fillna(0)
+                            ndf["y_latitude"]  = pd.to_numeric(ndf.get("y_latitude", 0), errors="coerce").fillna(0)
+                            ndf["location"]    = ndf["location"].fillna("")
+                            for row in ndf.itertuples(index=False):
+                                try:
+                                    nsc.add_node(Node(str(row.id),str(row.name),
+                                        str(row.node_type),float(row.capacity),
+                                        str(row.location),
+                                        float(row.x_longitude),float(row.y_latitude)))
+                                except: pass
+                            _prog.progress(25, text=f"{len(nsc.nodes)} nodes loaded")
+                        except Exception as ex:
+                            st.warning(f"Nodes sheet error: {ex}")
 
-                    # Sheet 2: Connections
-                    if "Connections" in xls.sheet_names:
+                    # ── Connections (vectorized) ──────────────────────────
+                    if "Connections" in sheets:
                         _prog.progress(30, text="Loading connections...")
-                        edf_raw = pd.read_excel(xls, "Connections")
-                        for _, r in edf_raw.iterrows():
-                            try:
-                                nsc.add_edge(Edge(str(r["source"]),str(r["target"]),
-                                    float(r["capacity"]),float(r.get("cost",1.0))))
-                            except: pass
+                        try:
+                            edf = pd.read_excel(xls,"Connections",
+                                dtype={"source":str,"target":str,"capacity":float,"cost":float})
+                            edf["cost"] = pd.to_numeric(edf.get("cost",1.0), errors="coerce").fillna(1.0)
+                            for row in edf.itertuples(index=False):
+                                try: nsc.add_edge(Edge(str(row.source),str(row.target),
+                                        float(row.capacity),float(row.cost)))
+                                except: pass
+                            _prog.progress(45, text=f"{len(nsc.edges)} connections loaded")
+                        except Exception as ex:
+                            st.warning(f"Connections sheet error: {ex}")
 
-                    # Sheet 3: Inventory
+                    # ── Inventory (vectorized) ────────────────────────────
                     ni = InventoryManager()
-                    if "Inventory" in xls.sheet_names:
+                    if "Inventory" in sheets:
                         _prog.progress(50, text="Loading inventory...")
-                        idf_raw = pd.read_excel(xls, "Inventory")
-                        for _, r in idf_raw.iterrows():
-                            try:
-                                iid = str(r["item_id"])
-                                if iid not in ni.items:
-                                    ni.add_item(iid, str(r.get("item_name",iid)), str(r.get("unit","units")))
-                                ni.set_stock(str(r["node_id"]),iid,float(r["current_stock"]),
-                                    float(r["safety_stock"]),float(r["reorder_point"]),
-                                    float(r.get("daily_demand",1)))
-                            except: pass
+                        try:
+                            idf = pd.read_excel(xls,"Inventory",dtype=str)
+                            num_cols=["current_stock","safety_stock","reorder_point","daily_demand"]
+                            for c in num_cols:
+                                if c in idf.columns:
+                                    idf[c]=pd.to_numeric(idf[c],errors="coerce").fillna(0)
+                            for row in idf.itertuples(index=False):
+                                try:
+                                    iid=str(row.item_id)
+                                    iname=str(getattr(row,"item_name",iid))
+                                    unit =str(getattr(row,"unit","units"))
+                                    if iid not in ni.items: ni.add_item(iid,iname,unit)
+                                    ni.set_stock(str(row.node_id),iid,
+                                        float(getattr(row,"current_stock",0)),
+                                        float(getattr(row,"safety_stock",0)),
+                                        float(getattr(row,"reorder_point",0)),
+                                        float(getattr(row,"daily_demand",1)))
+                                except: pass
+                            _prog.progress(62, text=f"{len(idf)} inventory records loaded")
+                        except Exception as ex:
+                            st.warning(f"Inventory sheet error: {ex}")
 
-                    # Sheet 4: Historical Demand (large — read efficiently)
-                    fc = DemandForecaster()
-                    if "Historical_Demand" in xls.sheet_names:
-                        _prog.progress(65, text="Loading historical demand (this may take a moment)...")
-                        # Use dtype spec for speed
-                        hdf = pd.read_excel(xls, "Historical_Demand",
-                                            dtype={"node_id":str,"demand":float})
-                        hdf["date"] = pd.to_datetime(hdf["date"])
-                        _prog.progress(80, text="Indexing demand history...")
-                        for nid, grp in hdf.groupby("node_id"):
-                            grp2 = grp.sort_values("date").reset_index(drop=True).copy()
-                            nn2  = nsc.nodes[nid].name if nid in nsc.nodes else str(nid)
-                            grp2["node_name"] = nn2
-                            fc.history[nid] = grp2
-
-                    # Sheet 5: Items (optional)
-                    if "Items" in xls.sheet_names:
-                        iraw = pd.read_excel(xls, "Items")
-                        for _, r in iraw.iterrows():
-                            try:
-                                iid = str(r.get("item_id",""))
+                    # ── Items sheet (optional) ────────────────────────────
+                    if "Items" in sheets:
+                        try:
+                            iraw = pd.read_excel(xls,"Items",dtype=str)
+                            for row in iraw.itertuples(index=False):
+                                iid=str(getattr(row,"item_id",""))
                                 if iid and iid not in ni.items:
-                                    ni.add_item(iid, str(r.get("item_name",iid)), str(r.get("unit","units")))
-                            except: pass
+                                    ni.add_item(iid,str(getattr(row,"item_name",iid)),str(getattr(row,"unit","units")))
+                        except: pass
 
-                    _prog.progress(95, text="Finalising...")
-                    st.session_state.sc = nsc
-                    st.session_state.inv = ni
-                    st.session_state.forecaster = fc
-                    st.session_state.scores = load_demo_scores()  # init scores for new nodes
-                    st.session_state.user_data_loaded = True
-                    st.session_state.ranking = None
-                    st.session_state._ff_cache = None
-                    st.session_state._ff_hash  = None
-                    st.session_state.dispatch_log = []
-                    st.session_state.highlight_path = []
-                    st.session_state.disrupted_edge = None
+                    # ── Historical demand — fast groupby ─────────────────
+                    fc = DemandForecaster()
+                    if "Historical_Demand" in sheets:
+                        _prog.progress(65, text="Loading demand history (large sheet)...")
+                        try:
+                            hdf = pd.read_excel(xls,"Historical_Demand",
+                                                dtype={"node_id":str,"demand":float})
+                            hdf["date"] = pd.to_datetime(hdf["date"], errors="coerce")
+                            hdf = hdf.dropna(subset=["date","demand"])
+                            hdf = hdf.sort_values("date").reset_index(drop=True)
+                            total_nodes = hdf["node_id"].nunique()
+                            _prog.progress(78, text=f"Indexing {total_nodes} demand nodes...")
+                            # Single vectorized groupby — much faster than loop
+                            for nid, grp in hdf.groupby("node_id", sort=False):
+                                grp2 = grp.copy()
+                                nn2  = nsc.nodes[str(nid)].name if str(nid) in nsc.nodes else str(nid)
+                                grp2["node_name"] = nn2
+                                grp2["node_id"]   = str(nid)
+                                fc.history[str(nid)] = grp2.reset_index(drop=True)
+                            _prog.progress(88, text=f"{len(hdf):,} demand records indexed")
+                        except Exception as ex:
+                            st.warning(f"Historical demand sheet error: {ex}")
+
+                    # ── Commit to session state ───────────────────────────
+                    _prog.progress(92, text="Saving to session...")
+                    st.session_state.sc              = nsc
+                    st.session_state.inv             = ni
+                    st.session_state.forecaster      = fc
+                    st.session_state.scores          = load_demo_scores()
+                    st.session_state.user_data_loaded= True
+                    st.session_state.ranking         = None
+                    st.session_state._ff_cache       = None
+                    st.session_state._ff_hash        = None
+                    st.session_state.dispatch_log    = []
+                    st.session_state.highlight_path  = []
+                    st.session_state.disrupted_edge  = None
                     st.session_state.disruption_result = None
+
                     _prog.progress(100, text="Done.")
                     _prog.empty()
-                    n_nodes=len(nsc.nodes); n_edges=len(nsc.edges)
-                    n_hist=sum(len(v) for v in fc.history.values())
-                    st.success(f"Import complete: {n_nodes} nodes, {n_edges} connections, {n_hist:,} demand records. Your data is active.")
+
+                    nn = len(nsc.nodes); ne = len(nsc.edges)
+                    ni_r = len(idf) if "Inventory" in sheets else 0
+                    nh   = sum(len(v) for v in fc.history.values())
+                    st.success(
+                        f"Import complete — {nn} nodes, {ne} connections, "
+                        f"{ni_r} inventory records, {nh:,} demand rows. "
+                        f"Data is now active and will be remembered.")
                     st.rerun()
                 else:
                     df=pd.read_csv(uf)
@@ -2849,6 +2940,31 @@ with st.sidebar:
         c1,c2=st.columns(2)
         if not ndf.empty: c1.download_button("Nodes",ndf.to_csv(index=False),"nodes.csv",use_container_width=True)
         if not edf.empty: c2.download_button("Edges",edf.to_csv(index=False),"edges.csv",use_container_width=True)
+
+        st.markdown('<div class="sb-sec">Session</div>', unsafe_allow_html=True)
+        _is_user_data = st.session_state.get("user_data_loaded", False)
+        if _is_user_data:
+            st.markdown(
+                '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;'
+                'padding:8px 12px;font-size:11px;color:#14532D;font-weight:600;">'
+                'Your data is saved in this browser. '
+                'It will reload automatically next visit.</div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;'
+                'padding:8px 12px;font-size:11px;color:#92400E;">'
+                'Demo data active. Upload your dataset above.</div>',
+                unsafe_allow_html=True)
+        if st.button("Clear saved data & reset", use_container_width=True, key="clear_ls"):
+            for k in ["sc","inv","scores","ranking","_ff_cache","_ff_hash",
+                      "disruption_result","highlight_path","disrupted_edge",
+                      "wh_forecasts","plant_req","dispatch_log","forecast_trained"]:
+                st.session_state[k] = (None if k not in ("dispatch_log","highlight_path","forecast_trained")
+                                       else [] if k in ("dispatch_log","highlight_path") else set())
+            st.session_state.user_data_loaded = False
+            components.html(make_clear_component(), height=0, scrolling=False)
+            st.rerun()
 
         st.markdown('<div class="sb-sec"> AI Assistant Setup (Free)</div>', unsafe_allow_html=True)
         sel_model=st.selectbox("**Select Free AI Model**",list(FREE_AI_MODELS.keys()),key="model_sel")
