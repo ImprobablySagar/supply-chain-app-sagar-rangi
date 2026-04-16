@@ -831,6 +831,107 @@ def create_excel_template():
 # ═══════════════════════════════════════════════════════════════
 # VISUALIZATIONS
 # ═══════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════
+# PERSISTENCE — serialize/restore supply chain state
+# ═══════════════════════════════════════════════════════════════
+
+def _sc_to_dict(sc):
+    return {
+        "nodes": [vars(n) for n in sc.nodes.values()],
+        "edges": [{"source":e.source,"target":e.target,
+                   "capacity":e.capacity,"cost":e.cost,"active":e.active}
+                  for e in sc.edges],
+    }
+
+def _dict_to_sc(d):
+    sc = SupplyChainGraph()
+    for n in d.get("nodes", []):
+        try:
+            sc.add_node(Node(n["id"],n["name"],n["node_type"],n["capacity"],
+                             n.get("location",""),n.get("x",0.0),n.get("y",0.0)))
+        except: pass
+    for e in d.get("edges", []):
+        try:
+            sc.add_edge(Edge(e["source"],e["target"],
+                             e["capacity"],e.get("cost",1.0),e.get("active",True)))
+        except: pass
+    return sc
+
+def _inv_to_dict(inv):
+    return {"items": inv.items, "stock": inv.stock}
+
+def _dict_to_inv(d):
+    inv = InventoryManager()
+    inv.items = d.get("items", {})
+    inv.stock  = d.get("stock",  {})
+    return inv
+
+def _build_save_payload(sc, inv, scores, dispatch_log):
+    import json as _j
+    try:
+        return _j.dumps({
+            "v": 3,
+            "sc":       _sc_to_dict(sc),
+            "inv":      _inv_to_dict(inv),
+            "scores":   scores or {},
+            "dispatch": dispatch_log or [],
+        }, separators=(",",":"), default=str)
+    except:
+        return None
+
+def _restore_from_payload(payload_str):
+    import json as _j
+    try:
+        d = _j.loads(payload_str)
+        if d.get("v") != 3:
+            return None
+        return (_dict_to_sc(d["sc"]),
+                _dict_to_inv(d["inv"]),
+                d.get("scores", {}),
+                d.get("dispatch", []))
+    except:
+        return None
+
+def make_save_component(payload_json):
+    """Invisible HTML that writes JSON to localStorage"""
+    import json as _j
+    safe = _j.dumps(payload_json)   # double-encode so any quotes are escaped
+    return (
+        f'<script>'
+        f'try{{localStorage.setItem("sc_platform_v3",{safe});}}catch(e){{}}'
+        f'</script>'
+    )
+
+def make_clear_component():
+    return ('<script>try{localStorage.removeItem("sc_platform_v3");}catch(e){}</script>')
+
+def make_restore_loader():
+    """
+    Injects JS that reads localStorage and writes the value into a
+    hidden Streamlit text-input so Python can read it via st.query_params
+    or via a hidden widget value.
+    """
+    return """
+<script>
+(function(){
+  try {
+    var data = localStorage.getItem('sc_platform_v3') || '';
+    if (data.length > 20) {
+      // Encode and push into URL param so Streamlit can read it on next run
+      // Only do this once per session flag
+      if (!sessionStorage.getItem('sc_restored')) {
+        sessionStorage.setItem('sc_restored', '1');
+        var encoded = encodeURIComponent(data);
+        var url = window.location.href.split('?')[0] + '?_ls=' + encoded;
+        window.history.replaceState(null, '', url);
+        window.location.reload();
+      }
+    }
+  } catch(e) {}
+})();
+</script>"""
+
 # ── Performance: graph hash for cache invalidation ──────────────────
 def _graph_hash(sc):
     """Cheap fingerprint: node count + edge count + sum of capacities"""
@@ -2172,6 +2273,107 @@ def create_excel_template():
 # ═══════════════════════════════════════════════════════════════
 # VISUALIZATIONS
 # ═══════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════
+# PERSISTENCE — serialize/restore supply chain state
+# ═══════════════════════════════════════════════════════════════
+
+def _sc_to_dict(sc):
+    return {
+        "nodes": [vars(n) for n in sc.nodes.values()],
+        "edges": [{"source":e.source,"target":e.target,
+                   "capacity":e.capacity,"cost":e.cost,"active":e.active}
+                  for e in sc.edges],
+    }
+
+def _dict_to_sc(d):
+    sc = SupplyChainGraph()
+    for n in d.get("nodes", []):
+        try:
+            sc.add_node(Node(n["id"],n["name"],n["node_type"],n["capacity"],
+                             n.get("location",""),n.get("x",0.0),n.get("y",0.0)))
+        except: pass
+    for e in d.get("edges", []):
+        try:
+            sc.add_edge(Edge(e["source"],e["target"],
+                             e["capacity"],e.get("cost",1.0),e.get("active",True)))
+        except: pass
+    return sc
+
+def _inv_to_dict(inv):
+    return {"items": inv.items, "stock": inv.stock}
+
+def _dict_to_inv(d):
+    inv = InventoryManager()
+    inv.items = d.get("items", {})
+    inv.stock  = d.get("stock",  {})
+    return inv
+
+def _build_save_payload(sc, inv, scores, dispatch_log):
+    import json as _j
+    try:
+        return _j.dumps({
+            "v": 3,
+            "sc":       _sc_to_dict(sc),
+            "inv":      _inv_to_dict(inv),
+            "scores":   scores or {},
+            "dispatch": dispatch_log or [],
+        }, separators=(",",":"), default=str)
+    except:
+        return None
+
+def _restore_from_payload(payload_str):
+    import json as _j
+    try:
+        d = _j.loads(payload_str)
+        if d.get("v") != 3:
+            return None
+        return (_dict_to_sc(d["sc"]),
+                _dict_to_inv(d["inv"]),
+                d.get("scores", {}),
+                d.get("dispatch", []))
+    except:
+        return None
+
+def make_save_component(payload_json):
+    """Invisible HTML that writes JSON to localStorage"""
+    import json as _j
+    safe = _j.dumps(payload_json)   # double-encode so any quotes are escaped
+    return (
+        f'<script>'
+        f'try{{localStorage.setItem("sc_platform_v3",{safe});}}catch(e){{}}'
+        f'</script>'
+    )
+
+def make_clear_component():
+    return ('<script>try{localStorage.removeItem("sc_platform_v3");}catch(e){}</script>')
+
+def make_restore_loader():
+    """
+    Injects JS that reads localStorage and writes the value into a
+    hidden Streamlit text-input so Python can read it via st.query_params
+    or via a hidden widget value.
+    """
+    return """
+<script>
+(function(){
+  try {
+    var data = localStorage.getItem('sc_platform_v3') || '';
+    if (data.length > 20) {
+      // Encode and push into URL param so Streamlit can read it on next run
+      // Only do this once per session flag
+      if (!sessionStorage.getItem('sc_restored')) {
+        sessionStorage.setItem('sc_restored', '1');
+        var encoded = encodeURIComponent(data);
+        var url = window.location.href.split('?')[0] + '?_ls=' + encoded;
+        window.history.replaceState(null, '', url);
+        window.location.reload();
+      }
+    }
+  } catch(e) {}
+})();
+</script>"""
+
 # ── Performance: graph hash for cache invalidation ──────────────────
 def _graph_hash(sc):
     """Cheap fingerprint: node count + edge count + sum of capacities"""
@@ -2617,37 +2819,31 @@ st.set_page_config(page_title="SR — Supply Chain & Operations", page_icon=None
 st.markdown(APP_CSS, unsafe_allow_html=True)
 
 # Session state
+# ── Restore from localStorage on first visit ─────────────────────────────
+_ls_param = st.query_params.get("_ls", "")
+if _ls_param and not st.session_state.get("user_data_loaded", False):
+    try:
+        import urllib.parse as _ul
+        _restored = _restore_from_payload(_ul.unquote(_ls_param))
+        if _restored:
+            _sc_r, _inv_r, _scores_r, _disp_r = _restored
+            st.session_state["sc"]            = _sc_r
+            st.session_state["inv"]           = _inv_r
+            st.session_state["scores"]        = _scores_r
+            st.session_state["dispatch_log"]  = _disp_r
+            st.session_state["user_data_loaded"] = True
+            st.query_params.clear()
+    except:
+        pass
+
 for k,v in [("sc",None),("inv",None),("scores",None),("dispatch_log",[]),
             ("disruption_result",None),("highlight_path",[]),("disrupted_edge",None),
             ("ranking",None),("forecaster",None),("forecast_trained",set()),
             ("chat_history",[]),("ai_key",""),("ai_model",list(FREE_AI_MODELS.keys())[0]),
             ("last_ai_text",""),("wh_forecasts",None),("plant_req",None),
-            ("user_data_loaded", False), ("ls_restore_attempted", False),
-            ("_ff_cache", None), ("_ff_hash", None),
+            ("user_data_loaded", False), ("_ff_cache", None), ("_ff_hash", None),
             ("_pending_save", False), ("_save_payload", None)]:
     if k not in st.session_state: st.session_state[k]=v
-
-# ── Restore from localStorage on first load ───────────────────
-if not st.session_state.ls_restore_attempted:
-    st.session_state.ls_restore_attempted = True
-    # Try query-param based restore (set by JS on previous session)
-    qp = st.query_params.get("_ls", None)
-    if qp:
-        try:
-            import urllib.parse as _ul
-            payload_str = _ul.unquote(qp)
-            result = _restore_from_payload(payload_str)
-            if result:
-                sc_r, inv_r, scores_r, dispatch_r = result
-                st.session_state.sc = sc_r
-                st.session_state.inv = inv_r
-                st.session_state.scores = scores_r
-                st.session_state.dispatch_log = dispatch_r
-                st.session_state.user_data_loaded = True
-                st.session_state.forecaster = DemandForecaster()
-                # Clear the query param after restore
-                st.query_params.clear()
-        except: pass
 
 # ── Fall back to demo if nothing loaded ───────────────────────
 if not st.session_state.user_data_loaded:
@@ -2658,16 +2854,15 @@ if st.session_state.forecaster is None: st.session_state.forecaster=DemandForeca
 
 sc=st.session_state.sc; inv=st.session_state.inv
 
-# ── Auto-save to localStorage on every render ─────────────────
-_save_json = _build_save_payload(
-    sc, inv,
+# ── Auto-save on every render (invisible, ~1ms) ───────────────────────────
+_auto_save_json = _build_save_payload(
+    sc, st.session_state.inv,
     st.session_state.scores,
-    st.session_state.dispatch_log
-)
-if _save_json:
-    # Write save script (runs in browser, invisible)
-    _save_html = make_save_component(_save_json)
-    components.html(_save_html, height=0, scrolling=False)
+    st.session_state.dispatch_log)
+if _auto_save_json:
+    components.html(make_save_component(_auto_save_json), height=0, scrolling=False)
+
+
 
 # ── Active dataset banner ────────────────────────────────
 if st.session_state.get("user_data_loaded", False):
@@ -2963,7 +3158,6 @@ with st.sidebar:
                 st.session_state[k] = (None if k not in ("dispatch_log","highlight_path","forecast_trained")
                                        else [] if k in ("dispatch_log","highlight_path") else set())
             st.session_state.user_data_loaded = False
-            components.html(make_clear_component(), height=0, scrolling=False)
             st.rerun()
 
         st.markdown('<div class="sb-sec"> AI Assistant Setup (Free)</div>', unsafe_allow_html=True)
