@@ -3537,8 +3537,8 @@ with t4:
                 fig_node_risk = go.Figure()
                 risk_colors = {"Critical":"#DC2626","High":"#D97706","Medium":"#2563EB","Low":"#16A34A"}
                 node_names_r  = [r["Node"]  for r in rows]
-                node_drops_r  = [float(r["Max Drop"].replace("%","")) for r in rows]
-                node_colors_r = [risk_colors.get(r["Risk"],"#94A3B8") for r in rows]
+                node_drops_r  = [float(str(r["Max Drop"]).replace("%","").strip()) for r in rows]
+                node_colors_r = [risk_colors.get(r["Risk Level"],"#94A3B8") for r in rows]
                 fig_node_risk.add_trace(go.Bar(
                     y=node_names_r, x=node_drops_r, orientation="h",
                     marker_color=node_colors_r,
