@@ -188,7 +188,7 @@ class SupplyChainGraph:
 
     def to_nx(self):
         G = nx.DiGraph()
-        for nid, n in self.nodes.items(): G.add_node(nid, **vars(n))
+        for nid, n in self.nodes.items(): G.add_node(nid, vars(n))
         for e in self.edges:
             if e.active:
                 G.add_edge(e.source, e.target, capacity=e.capacity, weight=e.cost)
@@ -197,7 +197,7 @@ class SupplyChainGraph:
     def geo_shortest_path(self, src, tgt):
         """Shortest path using real lat/lon distances as weights"""
         G = nx.DiGraph()
-        for nid, n in self.nodes.items(): G.add_node(nid, **vars(n))
+        for nid, n in self.nodes.items(): G.add_node(nid, vars(n))
         for e in self.edges:
             if not e.active: continue
             sn = self.nodes[e.source]; tn = self.nodes[e.target]
@@ -1630,7 +1630,7 @@ class SupplyChainGraph:
 
     def to_nx(self):
         G = nx.DiGraph()
-        for nid, n in self.nodes.items(): G.add_node(nid, **vars(n))
+        for nid, n in self.nodes.items(): G.add_node(nid, vars(n))
         for e in self.edges:
             if e.active:
                 G.add_edge(e.source, e.target, capacity=e.capacity, weight=e.cost)
@@ -1639,7 +1639,7 @@ class SupplyChainGraph:
     def geo_shortest_path(self, src, tgt):
         """Shortest path using real lat/lon distances as weights"""
         G = nx.DiGraph()
-        for nid, n in self.nodes.items(): G.add_node(nid, **vars(n))
+        for nid, n in self.nodes.items(): G.add_node(nid, vars(n))
         for e in self.edges:
             if not e.active: continue
             sn = self.nodes[e.source]; tn = self.nodes[e.target]
@@ -2915,11 +2915,11 @@ with st.sidebar:
 
     with st_a:
         st.markdown('<div class="sb-sec">Add New Node</div>', unsafe_allow_html=True)
-        nn=st.text_input("**Node Name**",placeholder="e.g. Plant Delhi",key="nn",label_visibility="collapsed")
+        nn=st.text_input("Node Name",placeholder="e.g. Plant Delhi",key="nn",label_visibility="collapsed")
         c1,c2=st.columns(2)
-        nt=c1.selectbox("**Type**",["plant","warehouse","demand"],key="nt")
-        nc=c2.number_input("**Capacity**",min_value=1,value=200,key="nc")
-        nl=st.text_input("**Location**",placeholder="City, State",key="nl",label_visibility="collapsed")
+        nt=c1.selectbox("Type",["plant","warehouse","demand"],key="nt")
+        nc=c2.number_input("Capacity",min_value=1,value=200,key="nc")
+        nl=st.text_input("Location",placeholder="City, State",key="nl",label_visibility="collapsed")
         if st.button("+ Add Node",use_container_width=True):
             if nn.strip():
                 nid=nt[0].upper()+str(len([n for n in sc.nodes.values() if n.node_type==nt])+1)
@@ -2929,10 +2929,10 @@ with st.sidebar:
         for ntype,label in [("plant"," Plants"),("warehouse"," Warehouses"),("demand"," Demand Points")]:
             nlist=[n for n in sc.nodes.values() if n.node_type==ntype]
             if nlist:
-                with st.expander(f"**{label}** ({len(nlist)})"):
+                with st.expander("{label} ({len(nlist)})"):
                     for n in nlist:
                         c1,c2=st.columns([4,1])
-                        c1.markdown(f"**{n.name}** <span style='color:#7F8C8D;font-size:11px'>{int(n.capacity)}</span>",unsafe_allow_html=True)
+                        c1.markdown(f"<b>{n.name}</b> <span style='color:#7F8C8D;font-size:11px'>{int(n.capacity)}</span>",unsafe_allow_html=True)
                         if c2.button("X",key=f"dn_{n.id}"):
                             del sc.nodes[n.id]; sc.edges=[e for e in sc.edges if e.source!=n.id and e.target!=n.id]; st.rerun()
 
@@ -2940,11 +2940,11 @@ with st.sidebar:
         st.markdown('<div class="sb-sec">Add Connection</div>', unsafe_allow_html=True)
         no={n.name:n.id for n in sc.nodes.values()}
         if len(sc.nodes)>=2:
-            sl=st.selectbox("**From Node**",list(no.keys()),key="es")
-            tl=st.selectbox("**To Node**",  list(no.keys()),key="et")
+            sl=st.selectbox("From Node",list(no.keys()),key="es")
+            tl=st.selectbox("To Node",  list(no.keys()),key="et")
             c1,c2=st.columns(2)
-            ecap=c1.number_input("**Capacity**",min_value=1,value=100,key="ec")
-            ecos=c2.number_input("**Cost**",min_value=0.1,value=1.0,step=0.1,key="ecs")
+            ecap=c1.number_input("Capacity",min_value=1,value=100,key="ec")
+            ecos=c2.number_input("Cost",min_value=0.1,value=1.0,step=0.1,key="ecs")
             if st.button(" Add Connection",use_container_width=True):
                 s,t=no[sl],no[tl]
                 if s==t: st.error("Source and target must differ")
@@ -3161,10 +3161,10 @@ with st.sidebar:
             st.rerun()
 
         st.markdown('<div class="sb-sec"> AI Assistant Setup (Free)</div>', unsafe_allow_html=True)
-        sel_model=st.selectbox("**Select Free AI Model**",list(FREE_AI_MODELS.keys()),key="model_sel")
+        sel_model=st.selectbox("Select Free AI Model",list(FREE_AI_MODELS.keys()),key="model_sel")
         st.session_state.ai_model=sel_model
-        st.caption(f"**Free signup:** [console.groq.com]({GROQ_SIGNUP}) — No credit card needed!")
-        key_in=st.text_input("**Groq API Key**",value=st.session_state.ai_key,type="password",placeholder="gsk_...",key="key_in")
+        st.caption(f"Free signup: [console.groq.com]({GROQ_SIGNUP}) — No credit card needed!")
+        key_in=st.text_input("Groq API Key",value=st.session_state.ai_key,type="password",placeholder="gsk_...",key="key_in")
         if key_in!=st.session_state.ai_key: st.session_state.ai_key=key_in
         if st.session_state.ai_key: st.success("OK API key set")
         else: st.info("Get free key at console.groq.com")
@@ -3207,7 +3207,7 @@ with t1:
             st.markdown(f'<div class="al-r" style="margin-top:12px"> Critical stock: {items}</div>',unsafe_allow_html=True)
 
         st.markdown("<br>",unsafe_allow_html=True)
-        _,co=st.columns([5,1]); show_cap=co.checkbox("**Edge labels**",value=True,key="ec_cb")
+        _,co=st.columns([5,1]); show_cap=co.checkbox("Edge labels",value=True,key="ec_cb")
         fig=draw_network(sc,st.session_state.highlight_path,st.session_state.disrupted_edge,show_cap,active_dis)
         st.plotly_chart(fig,use_container_width=True)
         st.markdown('<div style="display:flex;gap:20px;font-size:11px;color:#5D6D7E">'+
@@ -3220,10 +3220,10 @@ with t1:
         st.markdown('<div class="sh">Shortest Path Finder with Transport Mode</div>',unsafe_allow_html=True)
         nlab={n.name:n.id for n in sc.nodes.values()}
         c1,c2,c3,c4=st.columns([2,2,1,1])
-        sp1=c1.selectbox("**From**",list(nlab.keys()),key="sp1")
-        sp2=c2.selectbox("**To**",list(nlab.keys()),key="sp2",index=min(2,len(nlab)-1))
-        load_units=c3.number_input("**Load (units)**",min_value=1,value=100,key="load_u")
-        urgent=c4.checkbox("**Urgent?**",key="urgent_cb")
+        sp1=c1.selectbox("From",list(nlab.keys()),key="sp1")
+        sp2=c2.selectbox("To",list(nlab.keys()),key="sp2",index=min(2,len(nlab)-1))
+        load_units=c3.number_input("Load (units)",min_value=1,value=100,key="load_u")
+        urgent=c4.checkbox("Urgent?",key="urgent_cb")
 
         if st.button(" Find Path & Transport Mode",use_container_width=False,key="find_path_btn"):
             fid=nlab[sp1]; tid=nlab[sp2]
@@ -3248,20 +3248,20 @@ with t1:
                 st.session_state["last_path_result"]=(res,transport_recs,total_dist,total_cost_est)
                 st.rerun()
             else:
-                st.error(" **No path found** between these nodes. Check that connections exist.")
+                st.error(" No path found between these nodes. Check that connections exist.")
                 st.session_state.highlight_path=[]
 
         if "last_path_result" in st.session_state and st.session_state.highlight_path:
             res,transport_recs,total_dist,total_cost_est=st.session_state["last_path_result"]
             path=st.session_state.highlight_path
             pnames=[sc.nodes[n].name for n in path]
-            st.markdown(f'<div class="al-g">OK **Path:** {" → ".join(pnames)}</div>',unsafe_allow_html=True)
+            st.markdown(f'<div class="al-g">OK <b>Path:</b> {" → ".join(pnames)}</div>',unsafe_allow_html=True)
 
             st.markdown('<div class="sh" style="margin-top:12px">Transport Recommendations</div>',unsafe_allow_html=True)
             if transport_recs:
                 for i,tr in enumerate(transport_recs):
                     src_name=sc.nodes[path[i]].name; tgt_name=sc.nodes[path[i+1]].name
-                    dist_str=f"**{tr['dist_km']} km**" if tr['dist_km'] else "distance N/A"
+                    dist_str=f"<b>{tr['dist_km']} km</b>" if tr['dist_km'] else "distance N/A"
                     cost_str=f"₹{tr['cost_estimate']:,.0f}" if tr['cost_estimate'] else "N/A"
                     time_str=f"{tr['hours']:.1f} hrs ({tr['days']:.1f} days)" if tr['hours'] else "N/A"
                     st.markdown(f"""
@@ -3296,7 +3296,7 @@ with t1:
             if ff:
                 st.plotly_chart(draw_gauge_charts(ff,sc.nodes),use_container_width=True)
             else:
-                st.info("Click **Compute Fulfillment** to analyse supply vs demand across your network.")
+                st.info("Click Compute Fulfillment to analyse supply vs demand across your network.")
             if ff:
               with st.expander("View Detailed Table"):
                 rows=[{"Demand Point":sc.nodes[d].name,"Required":info["required"],"Fulfilled":info["fulfilled"],
@@ -3371,7 +3371,7 @@ with t2:
     st.markdown('<div class="sh">Stock Chart</div>',unsafe_allow_html=True)
     nws=[nid for nid in sc.nodes if nid in inv.stock and inv.stock[nid]]
     if nws:
-        sel_n=st.selectbox("**Select Node**",[sc.nodes[n].name for n in nws],key="inv_ns")
+        sel_n=st.selectbox("Select Node",[sc.nodes[n].name for n in nws],key="inv_ns")
         sel_id=[n for n in nws if sc.nodes[n].name==sel_n]
         if sel_id:
             nid=sel_id[0]; items_data=inv.stock[nid]
@@ -3393,12 +3393,12 @@ with t2:
     with st.form("stock_upd"):
         c1,c2,c3,c4=st.columns([2,2,1,2])
         un=[sc.nodes[n].name for n in sc.nodes if n in inv.stock]
-        upd_n=c1.selectbox("**Node**",un,key="upd_n") if un else c1.text_input("Node")
+        upd_n=c1.selectbox("Node",un,key="upd_n") if un else c1.text_input("Node")
         uid=[n for n in sc.nodes if sc.nodes[n].name==upd_n and n in inv.stock]
         iopts={inv.items.get(iid,{}).get("name",iid):iid for iid in (inv.stock.get(uid[0],{}) if uid else {})}
-        upd_i=c2.selectbox("**Item**",list(iopts.keys()),key="upd_i") if iopts else c2.text_input("Item ID")
-        upd_q=c3.number_input("**Qty (±)**",value=0.0,step=1.0,key="upd_q")
-        upd_nt=c4.text_input("**Note**",placeholder="Optional",key="upd_nt")
+        upd_i=c2.selectbox("Item",list(iopts.keys()),key="upd_i") if iopts else c2.text_input("Item ID")
+        upd_q=c3.number_input("Qty (±)",value=0.0,step=1.0,key="upd_q")
+        upd_nt=c4.text_input("Note",placeholder="Optional",key="upd_nt")
         if st.form_submit_button("Update Stock",use_container_width=True) and uid:
             iid=iopts.get(upd_i,upd_i)
             if inv.update_stock(uid[0],iid,upd_q):
@@ -3415,12 +3415,12 @@ with t2:
 # ─────────────────────────────────────────────────────────────
 with t3:
     st.markdown('<div class="sh">Disruption Scenario Analysis</div>',unsafe_allow_html=True)
-    st.caption("Simulate a connection failure — see **resilience score**, **alternate routes**, and **safety stock** coverage.")
+    st.caption("Simulate a connection failure — see resilience score, alternate routes, and safety stock coverage.")
     if not sc.edges: st.info("Add connections to run disruption analysis.")
     else:
         eopts={f"{sc.nodes[e.source].name} → {sc.nodes[e.target].name} (cap:{int(e.capacity)})":(e.source,e.target) for e in sc.edges}
         c1,c2=st.columns([4,1])
-        chosen=c1.selectbox("**Connection to disrupt**",list(eopts.keys()),label_visibility="collapsed",key="dis_sel")
+        chosen=c1.selectbox("Connection to disrupt",list(eopts.keys()),label_visibility="collapsed",key="dis_sel")
         c2.markdown("<br>",unsafe_allow_html=True)
         if c2.button("Analyse",use_container_width=True,type="primary",key="dis_btn"):
             src,tgt=eopts[chosen]
@@ -3437,7 +3437,7 @@ with t3:
                 st.markdown(f'<div class="sh">Impact — {result["removed_edge"]}</div>',unsafe_allow_html=True)
                 sv=result["resilience_score"]
                 cls="al-g" if sv>=70 else "al-a" if sv>=40 else "al-r"
-                txt="**Low Risk** — Chain retains continuity." if sv>=70 else "**Moderate Risk** — Partial disruption." if sv>=40 else "**Critical Risk** — Major disruption!"
+                txt="Low Risk — Chain retains continuity." if sv>=70 else "Moderate Risk — Partial disruption." if sv>=40 else "Critical Risk — Major disruption!"
                 st.markdown(f'<div class="{cls}"><b>{sv}%</b> — {txt}</div>',unsafe_allow_html=True)
                 st.markdown("<br>",unsafe_allow_html=True)
                 for d_id,imp in result["impact"].items():
@@ -3458,7 +3458,7 @@ with t3:
             if result["alt_paths"]:
                 for d_id,paths in result["alt_paths"].items():
                     if paths:
-                        st.markdown(f"**{sc.nodes[d_id].name}** — {len(paths)} alternate route(s):")
+                        st.markdown(f"<b>{sc.nodes[d_id].name}</b> — {len(paths)} alternate route(s):", unsafe_allow_html=True)
                         for i,p in enumerate(paths,1):
                             st.markdown(f'<div class="card"><b>Route {i}</b> | Cost: {p["cost"]} | {" → ".join(p["path"])}</div>',unsafe_allow_html=True)
             else:
@@ -3470,7 +3470,7 @@ with t3:
             for d_id,imp in result["impact"].items():
                 if imp["drop_pct"]<=0: continue
                 sf=imp["lost_units"]
-                st.markdown(f"**{imp['demand_name']}** — shortfall: **{sf:.0f} units**")
+                st.markdown(f"<b>{imp['demand_name']}</b> — shortfall: {sf:.0f} units", unsafe_allow_html=True)
                 rows_s=[]
                 for iid in list(inv.items.keys()):
                     alts=inv.find_alternatives(d_id,iid,sf,sc,de)
@@ -3503,14 +3503,14 @@ with t3:
 # ─────────────────────────────────────────────────────────────
 with t4:
     st.markdown('<div class="sh">Network Risk Heatmap</div>',unsafe_allow_html=True)
-    st.caption("**Green = Safe | Yellow = Moderate | Red = High Risk | Dark Red = Critical**")
+    st.caption("Green = Safe | Yellow = Moderate | Red = High Risk | Dark Red = Critical")
     if not sc.edges: st.info("Add connections first.")
     else:
         c1,c2=st.columns([3,1])
         if c2.button(" Run Stress Test",use_container_width=True,key="hm_btn"):
             with st.spinner("Testing all connections..."): st.session_state.ranking=sc.rank_critical_edges(); st.rerun()
         if st.session_state.ranking is None:
-            st.info("Click **Run Stress Test** to populate the risk heatmap.")
+            st.info("Click Run Stress Test to populate the risk heatmap.")
         if st.session_state.ranking:
             ranking=st.session_state.ranking
             st.plotly_chart(draw_heatmap(sc,ranking),use_container_width=True)
@@ -3524,8 +3524,8 @@ with t4:
                 nc=sum(1 for r in outs+ins if r["severity"]=="critical")
                 rl="Critical" if md>=50 else "High" if md>=25 else "Medium" if md>=5 else "Low"
                 rows.append({"Node":node.name,"Type":node.node_type.capitalize(),
-                             "Max Drop If Link Fails":f"**{md:.0f}%**","Critical Links":nc,"Risk Level":rl})
-            df_r=pd.DataFrame(rows).sort_values("Max Drop If Link Fails",ascending=False)
+                             "Max Drop":f"{md:.0f}%","Critical Links":nc,"Risk Level":rl})
+            df_r=pd.DataFrame(rows).sort_values("Max Drop",ascending=False)
             def rl_col(v):
                 c={"Critical":"#FADBD8","High":"#FDEBD0","Medium":"#D6EAF8","Low":"#D5F5E3"}
                 return f"background-color:{c.get(v,'#FFFFFF')}"
@@ -3569,19 +3569,19 @@ with t4:
 # ─────────────────────────────────────────────────────────────
 with t5:
     st.markdown('<div class="sh">AI-Powered Demand Forecasting</div>',unsafe_allow_html=True)
-    st.caption("**RandomForest + GradientBoosting ensemble** · Forecast → Warehouse → Plant propagation")
+    st.caption("RandomForest + GradientBoosting ensemble · Forecast → Warehouse → Plant propagation")
     fc=st.session_state.forecaster
     demand_nodes=[n for n in sc.nodes.values() if n.node_type=="demand"]
     if not demand_nodes: st.info("Add demand nodes to enable forecasting.")
     else:
         c1,c2,c3=st.columns([2,1,1])
-        sel_dem=c1.selectbox("**Demand node**",[n.name for n in demand_nodes],key="fc_node")
-        horizon=c2.selectbox("**Horizon (days)**",[14,30,60,90],index=1,key="fc_h")
-        use_syn=c3.checkbox("**Use generated history**",value=True,key="fc_syn")
+        sel_dem=c1.selectbox("Demand node",[n.name for n in demand_nodes],key="fc_node")
+        horizon=c2.selectbox("Horizon (days)",[14,30,60,90],index=1,key="fc_h")
+        use_syn=c3.checkbox("Use generated history",value=True,key="fc_syn")
 
         sel_node=next(n for n in demand_nodes if n.name==sel_dem)
         if not use_syn:
-            st.caption("Upload CSV with columns: **date** (YYYY-MM-DD), **demand** (number)")
+            st.caption("Upload CSV with columns: date (YYYY-MM-DD), demand (number)")
             hf=st.file_uploader("Upload historical CSV",type=["csv"],key="fc_up")
             if hf:
                 try:
@@ -3599,19 +3599,19 @@ with t5:
             if fdf is not None:
                 st.session_state.forecast_trained.add(nid)
                 m=fc.metrics[nid]
-                st.success(f"OK Model trained! **RMSE:{m['rmse']:.1f}** | **MAE:{m['mae']:.1f}** | **MAPE:{m['mape']:.1f}%** | **R²:{m['r2']:.3f}**")
+                st.success(f"OK Model trained! RMSE:{m['rmse']:.1f} | MAE:{m['mae']:.1f} | MAPE:{m['mape']:.1f}% | R²:{m['r2']:.3f}")
             st.rerun()
 
         nid=sel_node.id
         if nid in st.session_state.forecast_trained and nid in fc.forecasts:
             m=fc.metrics.get(nid,{})
             mc1,mc2,mc3,mc4=st.columns(4)
-            mc1.metric("**RMSE**",f"{m.get('rmse','—')}")
-            mc2.metric("**MAE**",f"{m.get('mae','—')}")
-            mc3.metric("**MAPE**",f"{m.get('mape','—')}%")
-            mc4.metric("**R²**",f"{m.get('r2','—')}")
+            mc1.metric("RMSE",f"{m.get('rmse','—')}")
+            mc2.metric("MAE",f"{m.get('mae','—')}")
+            mc3.metric("MAPE",f"{m.get('mape','—')}%")
+            mc4.metric("R²",f"{m.get('r2','—')}")
             st.plotly_chart(draw_forecast_chart(fc,nid,sc.nodes),use_container_width=True)
-            with st.expander(" **Forecast Values Table**"):
+            with st.expander(" Forecast Values Table"):
                 fdf=fc.forecasts[nid]
                 df_show=fdf[["date","forecast","lower","upper"]].copy()
                 df_show.columns=["Date","Forecast","Lower CI","Upper CI"]
@@ -3671,16 +3671,16 @@ with t5:
 with t6:
     st.markdown('<div class="sh">Dispatch Log — Live Goods Movement</div>',unsafe_allow_html=True)
     with st.form("dis_form"):
-        st.markdown("**Log New Dispatch**")
+        st.markdown("Log New Dispatch")
         c1,c2,c3=st.columns(3)
         all_names=[n.name for n in sc.nodes.values()]
-        df_from=c1.selectbox("**From Node**",all_names,key="df"); df_to=c2.selectbox("**To Node**",all_names,key="dt",index=min(1,len(all_names)-1))
+        df_from=c1.selectbox("From Node",all_names,key="df"); df_to=c2.selectbox("To Node",all_names,key="dt",index=min(1,len(all_names)-1))
         ai2={inv.items[iid]["name"]:iid for iid in inv.items} if inv.items else {}
-        df_item=c3.selectbox("**Item**",list(ai2.keys()) or ["—"],key="di")
+        df_item=c3.selectbox("Item",list(ai2.keys()) or ["—"],key="di")
         c1b,c2b,c3b=st.columns(3)
-        df_qty=c1b.number_input("**Quantity**",min_value=0.1,value=50.0,key="dq")
-        df_st=c2b.selectbox("**Status**",["In Transit","Delivered","Delayed"],key="ds")
-        df_no=c3b.text_input("**Notes**",placeholder="Optional",key="dno")
+        df_qty=c1b.number_input("Quantity",min_value=0.1,value=50.0,key="dq")
+        df_st=c2b.selectbox("Status",["In Transit","Delivered","Delayed"],key="ds")
+        df_no=c3b.text_input("Notes",placeholder="Optional",key="dno")
         if st.form_submit_button("Log Dispatch",use_container_width=True):
             fid=[n.id for n in sc.nodes.values() if n.name==df_from]
             tid=[n.id for n in sc.nodes.values() if n.name==df_to]
@@ -3691,7 +3691,7 @@ with t6:
                 st.session_state.dispatch_log.append({"timestamp":datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "from_node":df_from,"to_node":df_to,"from_id":fid[0],"to_id":tid[0],
                     "item":df_item,"item_id":iid,"quantity":df_qty,"status":df_st,"notes":df_no})
-                st.success(f"OK Logged: **{df_qty:.0f} units** of **{df_item}**"); st.rerun()
+                st.success(f"Logged: {df_qty:.0f} units of {df_item}"); st.rerun()
 
     if st.session_state.dispatch_log:
         st.markdown("<br>",unsafe_allow_html=True)
@@ -3721,9 +3721,9 @@ with t7:
         st.markdown('<div class="sh">Available-to-Promise Analysis</div>',unsafe_allow_html=True)
         ai3={inv.items[iid]["name"]:iid for iid in inv.items} if inv.items else {}
         c1,c2,c3=st.columns([2,1,1])
-        atp_i=c1.selectbox("**Item**",list(ai3.keys()) or ["No items"],key="atp_i")
-        atp_q=c2.number_input("**Required Qty**",min_value=1.0,value=100.0,key="atp_q")
-        atp_d=c3.selectbox("**Destination**",[n.name for n in sc.nodes.values() if n.node_type=="demand"],key="atp_d")
+        atp_i=c1.selectbox("Item",list(ai3.keys()) or ["No items"],key="atp_i")
+        atp_q=c2.number_input("Required Qty",min_value=1.0,value=100.0,key="atp_q")
+        atp_d=c3.selectbox("Destination",[n.name for n in sc.nodes.values() if n.node_type=="demand"],key="atp_d")
         if st.button(" Check Availability",use_container_width=True,key="atp_chk"):
             iid=ai3.get(atp_i,""); did=[n.id for n in sc.nodes.values() if n.name==atp_d]
             if iid and did:
@@ -3742,7 +3742,7 @@ with t7:
         scores=st.session_state.scores
         node_opts=[n for n in sc.nodes.values() if n.node_type in ("plant","warehouse")]
         if node_opts:
-            snm=st.selectbox("**Select Node**",[n.name for n in node_opts],key="sc_sel")
+            snm=st.selectbox("Select Node",[n.name for n in node_opts],key="sc_sel")
             snid=[n.id for n in node_opts if n.name==snm]
             if snid:
                 nid=snid[0]
@@ -3750,11 +3750,11 @@ with t7:
                 s=scores[nid]
                 c1,c2=st.columns([1,1])
                 with c1:
-                    st.markdown("**Edit Performance Scores (0–100)**")
-                    s["reliability"]    =st.slider("**Reliability**",   0,100,int(s["reliability"]),   key=f"sr_{nid}")
-                    s["lead_time"]      =st.slider("**Lead Time**",     0,100,int(s["lead_time"]),     key=f"sl_{nid}")
-                    s["quality"]        =st.slider("**Quality**",       0,100,int(s["quality"]),       key=f"sq_{nid}")
-                    s["cost_efficiency"]=st.slider("**Cost Efficiency**",0,100,int(s["cost_efficiency"]),key=f"sc_{nid}")
+                    st.markdown("Edit Performance Scores (0–100)")
+                    s["reliability"]    =st.slider("Reliability",   0,100,int(s["reliability"]),   key=f"sr_{nid}")
+                    s["lead_time"]      =st.slider("Lead Time",     0,100,int(s["lead_time"]),     key=f"sl_{nid}")
+                    s["quality"]        =st.slider("Quality",       0,100,int(s["quality"]),       key=f"sq_{nid}")
+                    s["cost_efficiency"]=st.slider("Cost Efficiency",0,100,int(s["cost_efficiency"]),key=f"sc_{nid}")
                     ov=round((s["reliability"]+s["lead_time"]+s["quality"]+s["cost_efficiency"])/4,1)
                     grade="A" if ov>=90 else "B" if ov>=75 else "C" if ov>=60 else "D"
                     gc_="b-g" if grade=="A" else "b-b" if grade=="B" else "b-a" if grade=="C" else "b-r"
@@ -3800,12 +3800,12 @@ with t7:
 # ─────────────────────────────────────────────────────────────
 with t8:
     st.markdown('<div class="sh">Geographic Network View</div>',unsafe_allow_html=True)
-    _,cr=st.columns([3,1]); mscope=cr.radio("**Scope**",["India","World"],key="geo_s")
+    _,cr=st.columns([3,1]); mscope=cr.radio("Scope",["India","World"],key="geo_s")
     has_c=[n for n in sc.nodes.values() if n.x!=0 or n.y!=0]
     if not has_c: st.info("No coordinates found. Load the demo supply chain to see the India map.")
     else:
         st.plotly_chart(draw_geo_map(sc,mscope.lower()),use_container_width=True)
-        with st.expander(" **Node Coordinates**"):
+        with st.expander(" Node Coordinates"):
             st.dataframe(pd.DataFrame([{"Node":n.name,"Type":n.node_type,"Lat":n.y,"Lon":n.x,"Location":n.location} for n in sc.nodes.values()]),use_container_width=True,hide_index=True)
 
 
@@ -3814,23 +3814,23 @@ with t8:
 # ─────────────────────────────────────────────────────────────
 with t9:
     st.markdown('<div class="sh">Supply Chain Report Generator</div>',unsafe_allow_html=True)
-    st.caption("Generate a **comprehensive Excel report** with charts, data, color coding, and recommendations.")
+    st.caption("Generate a comprehensive Excel report with charts, data, color coding, and recommendations.")
 
     with st.container():
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
-        st.markdown("** Report Period**")
+        st.markdown("<b>Report Period</b>", unsafe_allow_html=True)
         c1,c2=st.columns(2)
-        start_dt=c1.date_input("**From Date**",value=date.today()-timedelta(days=30),key="rpt_start")
-        end_dt  =c2.date_input("**To Date**",  value=date.today(),                   key="rpt_end")
+        start_dt=c1.date_input("From Date",value=date.today()-timedelta(days=30),key="rpt_start")
+        end_dt  =c2.date_input("To Date",  value=date.today(),                   key="rpt_end")
 
-        st.markdown("** Report Sections**")
+        st.markdown("<b>Report Sections</b>", unsafe_allow_html=True)
         c1,c2,c3=st.columns(3)
-        inc_network =c1.checkbox("**Network Summary**",value=True,key="r1")
-        inc_demand  =c1.checkbox("**Demand Fulfillment**",value=True,key="r2")
-        inc_inv     =c2.checkbox("**Inventory Status**",value=True,key="r3")
-        inc_risk    =c2.checkbox("**Risk Analysis**",value=True,key="r4")
-        inc_forecast=c3.checkbox("**Demand Forecast**",value=True,key="r5")
-        inc_score   =c3.checkbox("**Supplier Scorecard**",value=True,key="r6")
+        inc_network =c1.checkbox("Network Summary",value=True,key="r1")
+        inc_demand  =c1.checkbox("Demand Fulfillment",value=True,key="r2")
+        inc_inv     =c2.checkbox("Inventory Status",value=True,key="r3")
+        inc_risk    =c2.checkbox("Risk Analysis",value=True,key="r4")
+        inc_forecast=c3.checkbox("Demand Forecast",value=True,key="r5")
+        inc_score   =c3.checkbox("Supplier Scorecard",value=True,key="r6")
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("<br>",unsafe_allow_html=True)
@@ -3852,33 +3852,33 @@ with t9:
 
     st.markdown("<br>",unsafe_allow_html=True)
     st.markdown('<div class="sh">Report Preview</div>',unsafe_allow_html=True)
-    with st.expander("**Network Summary Preview**"):
+    with st.expander("Network Summary Preview"):
         plants=[n for n in sc.nodes.values() if n.node_type=="plant"]
         whs_=[n for n in sc.nodes.values() if n.node_type=="warehouse"]
         dems_=[n for n in sc.nodes.values() if n.node_type=="demand"]
         st.markdown(f"""
         | Metric | Value |
         |--------|-------|
-        | **Manufacturing Plants** | {len(plants)} |
-        | **Warehouses** | {len(whs_)} |
-        | **Demand Points** | {len(dems_)} |
-        | **Network Connections** | {len(sc.edges)} |
-        | **Total Plant Capacity** | {sum(n.capacity for n in plants):,.0f} |
-        | **Total Demand** | {sum(n.capacity for n in dems_):,.0f} |
-        | **Supply Coverage** | {round(sum(n.capacity for n in plants)/max(sum(n.capacity for n in dems_),1)*100,1)}% |
+        | Manufacturing Plants | {len(plants)} |
+        | Warehouses | {len(whs_)} |
+        | Demand Points | {len(dems_)} |
+        | Network Connections | {len(sc.edges)} |
+        | Total Plant Capacity | {sum(n.capacity for n in plants):,.0f} |
+        | Total Demand | {sum(n.capacity for n in dems_):,.0f} |
+        | Supply Coverage | {round(sum(n.capacity for n in plants)/max(sum(n.capacity for n in dems_),1)*100,1)}% |
         """)
-    with st.expander("**Inventory Status Preview**"):
+    with st.expander("Inventory Status Preview"):
         inv_df=inv.to_df(sc.nodes)
         if not inv_df.empty:
             def cs3(v): return f"color:{'#E74C3C' if v=='Critical' else '#E67E22' if v=='Low' else '#27AE60'};font-weight:700"
             st.dataframe(inv_df[["Node","Item","Current Stock","Safety Stock","Coverage Days","Status"]].style.map(cs3,subset=["Status"]),use_container_width=True,hide_index=True)
-    with st.expander("**Risk Analysis Preview**"):
+    with st.expander("Risk Analysis Preview"):
         if st.session_state.ranking:
             for r in st.session_state.ranking[:5]:
                 badge={"critical":"b-r","high":"b-a","medium":"b-b","low":"b-g"}[r["severity"]]
-                st.markdown(f'<span class="{badge}">{r["severity"].upper()}</span> **{r["label"]}** — Drop: **{r["avg_fulfillment_drop"]}%** | Resilience: **{r["resilience_score"]}%**',unsafe_allow_html=True)
+                st.markdown(f'<span class="{badge}">{r["severity"].upper()}</span> <b>{r["label"]}</b> — Drop: <b>{r["avg_fulfillment_drop"]}%</b> | Resilience: <b>{r["resilience_score"]}%</b>',unsafe_allow_html=True)
         else:
-            st.info("Run **Stress Test** in Risk Heatmap tab first.")
+            st.info("Run Stress Test in Risk Heatmap tab first.")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -3945,9 +3945,9 @@ with t10:
             if any(w in um for w in ["status","network","supply"]):
                 plants=[n for n in sc.nodes.values() if n.node_type=="plant"]
                 al=inv.get_alerts(sc.nodes)
-                reply=f"Network: **{len(plants)} plants**, **{len(sc.edges)} connections**. Stock alerts: **{len([a for a in al if a['level']=='critical'])} critical**. Add your free Groq API key in the sidebar for full AI responses!"
+                reply=f"Network: {len(plants)} plants, {len(sc.edges)} connections. Stock alerts: {len([a for a in al if a['level']=='critical'])} critical. Add your free Groq API key in the sidebar for full AI responses!"
             else:
-                reply="Add your **free Groq API key** in the sidebar (AI Assistant Setup) to enable full AI responses. Get it free at [console.groq.com](https://console.groq.com)!"
+                reply="Add your free Groq API key in the sidebar (AI Assistant Setup) to enable full AI responses. Get it free at [console.groq.com](https://console.groq.com)!"
             disp=re.sub(r'\*\*(.*?)\*\*',r'<b>\1</b>',reply)
             st.session_state.chat_history.append({"role":"assistant","content":reply,"display":disp}); st.rerun()
         else:
@@ -4002,7 +4002,7 @@ with t10:
     st.markdown("<br>",unsafe_allow_html=True)
     with st.form("chat_form",clear_on_submit=True):
         c1,c2=st.columns([5,1])
-        ui=c1.text_input("**Message...**",placeholder="Ask anything or paste voice text...",label_visibility="collapsed",key="chat_in")
+        ui=c1.text_input("Message...",placeholder="Ask anything or paste voice text...",label_visibility="collapsed",key="chat_in")
         send=c2.form_submit_button("Send",use_container_width=True)
         if send and ui.strip():
             st.session_state.chat_history.append({"role":"user","content":ui.strip()}); st.rerun()
