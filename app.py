@@ -74,7 +74,85 @@ LOGO_SIDEBAR = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120' 
 </svg>"""
 
 # ═══════════════════════════════════════════════════════════════
-# DATA MODELS
+# TRANSPORT LOGIC
+# ═══════════════════════════════════════════════════════════════
+TRANSPORT_MODES = {
+    "road":  {"speed_kmh": 60,  "cost_per_km": 2.5,  "label": "Road (Truck)",  "icon": "Truck"},
+    "rail":  {"speed_kmh": 80,  "cost_per_km": 1.2,  "label": "Rail",          "icon": "Rail"},
+    "air":   {"speed_kmh": 800, "cost_per_km": 12.0,  "label": "Air",           "icon": "Air"},
+    "sea":   {"speed_kmh": 35,  "cost_per_km": 0.8,  "label": "Sea/Inland",    "icon": "Sea"},
+}
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    """Distance between two lat/lon points in km"""
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
+
+def get_state(location_str):
+    """Extract state from 'City, State' format"""
+    parts = location_str.split(",")
+    return parts[-1].strip().lower() if len(parts) > 1 else location_str.strip().lower()
+
+def recommend_transport(src_node, tgt_node, load_units, urgent=False):
+    """
+    Smart transport mode recommendation based on:
+    - Same city/state → road
+    - Load size → truck / rail / air
+    - Urgent → air
+    - Distance → affects mode
+    """
+    src_loc = src_node.location; tgt_loc = tgt_node.location
+    src_state = get_state(src_loc); tgt_state = get_state(tgt_loc)
+    same_state = (src_state == tgt_state)
+
+    # Compute distance if coordinates available
+    dist_km = 0
+    if src_node.x and src_node.y and tgt_node.x and tgt_node.y:
+        dist_km = haversine_km(src_node.y, src_node.x, tgt_node.y, tgt_node.x)
+
+    recommendations = []
+
+    if urgent:
+        mode = "air"
+        reason = "Urgent delivery — air freight selected"
+    elif same_state or dist_km < 150:
+        mode = "road"
+        reason = "Same region — road transport (cheapest)"
+    elif load_units >= 500:
+        mode = "rail"
+        reason = f"High load ({load_units} units) — rail preferred"
+    elif load_units >= 150:
+        # Offer both
+        mode = "rail"
+        reason = f"Medium load ({load_units} units) — rail recommended"
+    else:
+        mode = "road"
+        reason = f"Small load ({load_units} units) — road (truck)"
+
+    m = TRANSPORT_MODES[mode]
+    if dist_km > 0:
+        cost = dist_km * m["cost_per_km"]
+        hours = dist_km / m["speed_kmh"]
+        days = hours / 24
+    else:
+        cost = None; hours = None; days = None
+
+    return {
+        "mode": mode, "label": m["label"], "icon": m["icon"],
+        "reason": reason, "dist_km": round(dist_km, 1) if dist_km else None,
+        "cost_estimate": round(cost, 0) if cost else None,
+        "hours": round(hours, 1) if hours else None,
+        "days": round(days, 2) if days else None,
+        "same_state": same_state,
+    }
+
+# ═══════════════════════════════════════════════════════════════
+# GRAPH ENGINE
+# ═══════════════════════════════════════════════════════════════
+
 # ═══════════════════════════════════════════════════════════════
 @dataclass
 class Node:
@@ -170,9 +248,18 @@ class SupplyChainGraph:
         self.nodes: dict = {}
         self.edges: list = []
 
-    def add_node(self, node): self.nodes[node.id] = node
+    def add_node(self, node):
+        # Accept both Node dataclass and dict (from persistence restore)
+        if isinstance(node, dict):
+            node = Node(node["id"], node["name"], node["node_type"],
+                       float(node["capacity"]), node.get("location",""),
+                       float(node.get("x", 0.0)), float(node.get("y", 0.0)))
+        self.nodes[node.id] = node
 
     def add_edge(self, edge):
+        if isinstance(edge, dict):
+            edge = Edge(edge["source"], edge["target"], float(edge["capacity"]),
+                       float(edge.get("cost",1.0)), bool(edge.get("active",True)))
         if edge.source not in self.nodes or edge.target not in self.nodes:
             raise ValueError(f"Node {edge.source} or {edge.target} not found")
         for e in self.edges:
@@ -188,7 +275,9 @@ class SupplyChainGraph:
 
     def to_nx(self):
         G = nx.DiGraph()
-        for nid, n in self.nodes.items(): G.add_node(nid, vars(n))
+        for nid, n in self.nodes.items():
+            nd = n if isinstance(n, dict) else vars(n)
+            G.add_node(nid, **nd)
         for e in self.edges:
             if e.active:
                 G.add_edge(e.source, e.target, capacity=e.capacity, weight=e.cost)
@@ -197,7 +286,9 @@ class SupplyChainGraph:
     def geo_shortest_path(self, src, tgt):
         """Shortest path using real lat/lon distances as weights"""
         G = nx.DiGraph()
-        for nid, n in self.nodes.items(): G.add_node(nid, vars(n))
+        for nid, n in self.nodes.items():
+            nd = n if isinstance(n, dict) else vars(n)
+            G.add_node(nid, **nd)
         for e in self.edges:
             if not e.active: continue
             sn = self.nodes[e.source]; tn = self.nodes[e.target]
@@ -299,7 +390,7 @@ class SupplyChainGraph:
         return sorted(ranking, key=lambda x: x["avg_fulfillment_drop"], reverse=True)
 
     def to_dict(self):
-        return {"nodes":[vars(n) for n in self.nodes.values()],"edges":[vars(e) for e in self.edges]}
+        return {"nodes":[vars(n) if hasattr(n,"__dataclass_fields__") else n for n in self.nodes.values()],"edges":[{"source":e.source,"target":e.target,"capacity":e.capacity,"cost":e.cost,"active":e.active} for e in self.edges]}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -838,7 +929,7 @@ def create_excel_template():
 
 def _sc_to_dict(sc):
     return {
-        "nodes": [vars(n) for n in sc.nodes.values()],
+        "nodes": [vars(n) if hasattr(n,"__dataclass_fields__") else n for n in sc.nodes.values()],
         "edges": [{"source":e.source,"target":e.target,
                    "capacity":e.capacity,"cost":e.cost,"active":e.active}
                   for e in sc.edges],
@@ -950,18 +1041,18 @@ def get_fulfillment_cached(sc):
     st.session_state["_ff_hash"]  = h
     return result
 
-NC={"plant":"#0F6E56","warehouse":"#185FA5","demand":"#993C1D"}
+NC={"plant":"#15803D","warehouse":"#1D4ED8","demand":"#B91C1C"}
 NS={"plant":"square","warehouse":"diamond","demand":"circle"}
 SEV={"critical":"#E74C3C","high":"#E67E22","medium":"#3498DB","low":"#27AE60","none":"#95A5A6"}
 
 # Green → Yellow → Red heatmap (proper, visible)
 HEATMAP_COLORSCALE=[
-    [0.0,  "#27AE60"],   # bright green — safe
-    [0.25, "#82E0AA"],   # light green
-    [0.50, "#F9E79F"],   # yellow — moderate
-    [0.65, "#F0B27A"],   # orange
-    [0.80, "#E74C3C"],   # red — high risk
-    [1.0,  "#922B21"],   # dark red — critical
+    [0.0,  "#16A34A"],
+    [0.25, "#86EFAC"],
+    [0.50, "#FCD34D"],
+    [0.65, "#FB923C"],
+    [0.80, "#EF4444"],
+    [1.0,  "#7F1D1D"],
 ]
 
 def _auto_layout(sc):
@@ -1009,7 +1100,7 @@ def draw_network(sc, highlight_path=None, disrupted_edge=None, show_cap=True, in
             mode="markers+text",name=ntype.capitalize()+"s",
             text=[sc.nodes[n].name for n in nids],
             textposition="middle left" if ntype=="plant" else "top center" if ntype=="warehouse" else "middle right",
-            textfont=dict(size=11,color="#2C3E50"),
+            textfont=dict(size=11,color="#1E293B"),
             hovertext=[f"<b>{sc.nodes[n].name}</b><br>{ntype}<br>Cap:{sc.nodes[n].capacity}<br>{sc.nodes[n].location}" for n in nids],
             hoverinfo="text",
             marker=dict(symbol=NS[ntype],size=[22 if ip else 15 for ip in in_p],
@@ -1092,7 +1183,7 @@ def draw_criticality_chart(ranking):
     labels=[r["label"] for r in ranking]; drops=[r["avg_fulfillment_drop"] for r in ranking]
     colors=[SEV[r["severity"]] for r in ranking]
     fig=go.Figure(go.Bar(x=drops,y=labels,orientation="h",marker_color=colors,
-        text=[f"  {d}%" for d in drops],textposition="outside",textfont=dict(size=11,color="#2C3E50")))
+        text=[f"  {d}%" for d in drops],textposition="outside",textfont=dict(size=11,color="#1E293B")))
     fig.update_layout(
         xaxis=dict(title="<b>Avg. Fulfillment Drop (%)</b>",range=[0,max(drops or [10])*1.35],gridcolor="#F1F5F9"),
         yaxis=dict(autorange="reversed",tickfont=dict(size=11,color="#2C3E50")),
@@ -1273,1506 +1364,240 @@ APP_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-*{box-sizing:border-box;}
-html,body,[class*="css"]{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;}
+/* ── Global ─────────────────────────────────────── */
+html,body,[class*="css"]{
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  font-size:14px; color:#1E293B;
+}
+.main .block-container{
+  background:#F8FAFC; padding-top:1rem; padding-bottom:2rem;
+  max-width:1400px;
+}
 
-/* ─── App background ─────────────────────────────── */
-.main .block-container{background:#F9FAFB;padding-top:1.2rem;padding-bottom:2rem;}
-
-/* ─── Header ─────────────────────────────────────── */
+/* ── App Header ─────────────────────────────────── */
 .app-header{
-  background:#0F172A;
-  border-radius:12px;padding:18px 26px;
-  display:flex;align-items:center;gap:20px;
-  margin-bottom:24px;
-  border:1px solid rgba(255,255,255,0.06);
-  box-shadow:0 8px 32px rgba(0,0,0,0.24);
+  background:linear-gradient(120deg,#0F172A 0%,#1E3A5F 55%,#0E4D6B 100%);
+  border-radius:12px; padding:18px 28px;
+  display:flex; align-items:center; gap:18px;
+  margin-bottom:20px;
+  border:1px solid rgba(255,255,255,0.07);
+  box-shadow:0 4px 24px rgba(0,0,0,0.22),0 1px 0 rgba(255,255,255,0.04) inset;
 }
-.app-header h1{color:#F8FAFC;font-size:17px;font-weight:700;margin:0;letter-spacing:-0.2px;}
-.app-header .tagline{color:#64748B;font-size:10px;margin:3px 0 0;text-transform:uppercase;letter-spacing:2px;font-weight:500;}
-.app-header .ver-badge{
-  margin-left:auto;background:rgba(255,255,255,0.06);
-  border:1px solid rgba(255,255,255,0.10);
-  color:#94A3B8;font-size:10px;font-weight:600;
-  padding:4px 12px;border-radius:20px;letter-spacing:1px;text-transform:uppercase;
-  white-space:nowrap;
+.app-header h1{
+  color:#F8FAFC; font-size:18px; font-weight:700;
+  margin:0; letter-spacing:-0.3px;
+}
+.app-header .sub{
+  color:rgba(255,255,255,0.42); font-size:10px;
+  margin:3px 0 0; text-transform:uppercase; letter-spacing:2px; font-weight:500;
+}
+.app-header .badge{
+  margin-left:auto; background:rgba(255,255,255,0.07);
+  border:1px solid rgba(255,255,255,0.12);
+  color:rgba(255,255,255,0.65); font-size:10px; font-weight:700;
+  padding:4px 12px; border-radius:20px;
+  letter-spacing:1.5px; text-transform:uppercase;
 }
 
-/* ─── Section Header ─────────────────────────────── */
+/* ── Section Heading ────────────────────────────── */
 .sh{
-  font-size:9.5px;font-weight:800;color:#94A3B8;
-  text-transform:uppercase;letter-spacing:2px;
-  padding-bottom:9px;margin-bottom:16px;margin-top:6px;
+  font-size:9.5px; font-weight:800; color:#64748B;
+  text-transform:uppercase; letter-spacing:2px;
+  padding-bottom:8px; margin-bottom:16px; margin-top:4px;
   border-bottom:1px solid #E2E8F0;
 }
 
-/* ─── KPI Cards ──────────────────────────────────── */
+/* ── KPI Card ───────────────────────────────────── */
 .kpi{
-  background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;
-  padding:16px 20px;border-top:3px solid #1E40AF;
-  box-shadow:0 1px 3px rgba(0,0,0,0.06);
-  transition:transform .15s,box-shadow .15s;
+  background:#FFFFFF; border:1px solid #E2E8F0;
+  border-radius:10px; padding:16px 18px;
+  border-top:3px solid #1E40AF;
+  box-shadow:0 1px 4px rgba(0,0,0,0.05);
+  transition:transform .15s ease,box-shadow .15s ease;
 }
-.kpi:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,0.09);}
-.kpi-lbl{font-size:9.5px;color:#94A3B8;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
-.kpi-val{font-size:24px;font-weight:800;color:#0F172A;line-height:1;letter-spacing:-1px;}
-.kpi-sub{font-size:10px;color:#94A3B8;margin-top:5px;font-weight:400;}
+.kpi:hover{
+  transform:translateY(-2px);
+  box-shadow:0 6px 20px rgba(0,0,0,0.09);
+}
+.kpi-lbl{
+  font-size:9.5px; color:#94A3B8; font-weight:700;
+  text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;
+}
+.kpi-val{
+  font-size:26px; font-weight:800; color:#0F172A;
+  line-height:1; letter-spacing:-1px;
+}
+.kpi-sub{
+  font-size:10.5px; color:#94A3B8; margin-top:5px;
+}
 
-/* ─── Cards ──────────────────────────────────────── */
-.card{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;
-  padding:14px 18px;margin:5px 0;font-size:13px;color:#1E293B;
-  box-shadow:0 1px 2px rgba(0,0,0,0.04);}
-.section-card{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;
-  padding:20px 24px;margin-bottom:18px;box-shadow:0 1px 4px rgba(0,0,0,0.05);}
+/* ── Cards ──────────────────────────────────────── */
+.card{
+  background:#FFFFFF; border:1px solid #E2E8F0;
+  border-radius:8px; padding:12px 16px; margin:5px 0;
+  font-size:13px; color:#1E293B;
+  box-shadow:0 1px 3px rgba(0,0,0,0.04);
+}
+.section-card{
+  background:#FFFFFF; border:1px solid #E2E8F0;
+  border-radius:12px; padding:20px 24px; margin-bottom:16px;
+  box-shadow:0 1px 4px rgba(0,0,0,0.05);
+}
 
-/* ─── Status Alerts ──────────────────────────────── */
+/* ── Status Alerts ──────────────────────────────── */
 .al-r{background:#FEF2F2;border-left:3px solid #DC2626;color:#1E293B;
-  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;}
+  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;line-height:1.5;}
 .al-a{background:#FFFBEB;border-left:3px solid #D97706;color:#1E293B;
-  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;}
+  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;line-height:1.5;}
 .al-g{background:#F0FDF4;border-left:3px solid #16A34A;color:#1E293B;
-  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;}
+  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;line-height:1.5;}
 .al-b{background:#EFF6FF;border-left:3px solid #2563EB;color:#1E293B;
-  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;}
+  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;line-height:1.5;}
 
-/* ─── Inline Badges ──────────────────────────────── */
+/* ── Badges ─────────────────────────────────────── */
 .b-r{background:#FEE2E2;color:#991B1B;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;}
 .b-a{background:#FEF3C7;color:#92400E;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;}
 .b-g{background:#DCFCE7;color:#14532D;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;}
 .b-b{background:#DBEAFE;color:#1E40AF;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;}
 
-/* ─── Transport Result ───────────────────────────── */
-.transport-card{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;
-  padding:16px 20px;margin:8px 0;box-shadow:0 1px 3px rgba(0,0,0,0.04);}
+/* ── Transport Card ─────────────────────────────── */
+.transport-card{
+  background:#F8FAFC; border:1px solid #E2E8F0;
+  border-radius:10px; padding:14px 18px; margin:8px 0;
+  box-shadow:0 1px 3px rgba(0,0,0,0.04);
+}
 .transport-mode{font-size:14px;font-weight:800;color:#0F172A;letter-spacing:-0.2px;}
+.transport-route{font-size:13px;font-weight:600;color:#1E293B;}
 .transport-detail{font-size:12px;color:#64748B;margin-top:6px;line-height:1.7;}
 .transport-reason{font-size:11px;color:#94A3B8;margin-top:4px;font-style:italic;}
-.transport-route{font-size:13px;font-weight:600;color:#1E293B;}
 
-/* ─── Buttons ────────────────────────────────────── */
-.stButton>button{
-  background:#0F172A!important;color:#FFFFFF!important;
-  border:none!important;border-radius:7px!important;
-  font-weight:600!important;font-size:13px!important;
-  padding:0.45rem 1.1rem!important;letter-spacing:0.1px!important;
-  box-shadow:0 1px 3px rgba(0,0,0,0.15)!important;
-  transition:background .15s,box-shadow .15s,transform .1s!important;
+/* ── Chat ───────────────────────────────────────── */
+.user-bubble{
+  background:#0F172A; color:#F8FAFC;
+  padding:10px 16px; border-radius:16px 16px 3px 16px;
+  max-width:74%; font-size:13px; line-height:1.5; margin:5px 0;
+  box-shadow:0 2px 8px rgba(15,23,42,0.2);
 }
-.stButton>button:hover{background:#1E293B!important;box-shadow:0 4px 12px rgba(0,0,0,0.2)!important;}
-.stButton>button:active{transform:scale(0.98)!important;}
-.stDownloadButton>button{background:#0F172A!important;color:#FFFFFF!important;border:none!important;border-radius:7px!important;font-weight:600!important;}
+.ai-bubble{
+  background:#FFFFFF; border:1px solid #E2E8F0; color:#1E293B;
+  padding:10px 16px; border-radius:16px 16px 16px 3px;
+  max-width:80%; font-size:13px; line-height:1.6; margin:5px 0;
+}
+.chat-wrap{display:flex;margin:3px 0;}
+.chat-right{justify-content:flex-end;}
+.chat-left{justify-content:flex-start;}
 
-/* ─── Inputs ─────────────────────────────────────── */
+/* ── Buttons ────────────────────────────────────── */
+.stButton>button{
+  background:#0F172A !important; color:#FFFFFF !important;
+  border:none !important; border-radius:7px !important;
+  font-weight:600 !important; font-size:13px !important;
+  padding:0.45rem 1.2rem !important; letter-spacing:0.1px !important;
+  box-shadow:0 1px 3px rgba(0,0,0,0.15) !important;
+  transition:background .15s,box-shadow .15s,transform .1s !important;
+}
+.stButton>button:hover{
+  background:#1E293B !important;
+  box-shadow:0 4px 14px rgba(0,0,0,0.2) !important;
+}
+.stButton>button:active{transform:scale(0.98) !important;}
+.stDownloadButton>button{
+  background:#0F172A !important; color:#FFFFFF !important;
+  border:none !important; border-radius:7px !important;
+  font-weight:600 !important;
+}
+
+/* ── Inputs ─────────────────────────────────────── */
 .stTextInput>div>div>input,
 .stNumberInput>div>div>input,
 .stTextArea>div>textarea{
-  border:1px solid #D1D5DB!important;border-radius:7px!important;
-  font-size:13px!important;background:#FFFFFF!important;color:#0F172A!important;
+  border:1px solid #D1D5DB !important; border-radius:7px !important;
+  font-size:13px !important; background:#FFFFFF !important;
+  color:#0F172A !important;
 }
 .stTextInput>div>div>input:focus,
 .stNumberInput>div>div>input:focus{
-  border-color:#1E40AF!important;box-shadow:0 0 0 3px rgba(30,64,175,0.1)!important;
+  border-color:#1E40AF !important;
+  box-shadow:0 0 0 3px rgba(30,64,175,0.1) !important;
 }
 .stSelectbox>div>div{
-  border:1px solid #D1D5DB!important;border-radius:7px!important;
-  background:#FFFFFF!important;font-size:13px!important;
+  border:1px solid #D1D5DB !important; border-radius:7px !important;
+  background:#FFFFFF !important; font-size:13px !important;
 }
 
-/* ─── Tabs ───────────────────────────────────────── */
+/* ── Tabs ───────────────────────────────────────── */
 .stTabs [data-baseweb="tab-list"]{
-  background:transparent!important;
-  border-bottom:2px solid #E2E8F0!important;gap:0!important;
+  background:transparent !important;
+  border-bottom:2px solid #E2E8F0 !important; gap:0 !important;
 }
 .stTabs [data-baseweb="tab"]{
-  font-size:11.5px!important;font-weight:700!important;
-  color:#64748B!important;text-transform:uppercase!important;
-  letter-spacing:1px!important;padding:10px 18px!important;
-  border-radius:0!important;background:transparent!important;
-  border-bottom:2px solid transparent!important;margin-bottom:-2px!important;
+  font-size:11px !important; font-weight:700 !important;
+  color:#64748B !important; text-transform:uppercase !important;
+  letter-spacing:1px !important; padding:10px 16px !important;
+  border-radius:0 !important; background:transparent !important;
+  border-bottom:2px solid transparent !important; margin-bottom:-2px !important;
 }
 .stTabs [aria-selected="true"]{
-  color:#0F172A!important;border-bottom:2px solid #0F172A!important;
+  color:#0F172A !important;
+  border-bottom:2px solid #0F172A !important;
 }
 
-/* ─── Expander ───────────────────────────────────── */
+/* ── Expander ───────────────────────────────────── */
 div[data-testid="stExpander"]{
-  border:1px solid #E2E8F0!important;border-radius:8px!important;
-  background:#FFFFFF!important;box-shadow:0 1px 3px rgba(0,0,0,0.04)!important;
+  border:1px solid #E2E8F0 !important; border-radius:8px !important;
+  background:#FFFFFF !important; box-shadow:0 1px 3px rgba(0,0,0,0.04) !important;
 }
 
-/* ─── Sidebar ────────────────────────────────────── */
-section[data-testid="stSidebar"]{background:#FFFFFF!important;border-right:1px solid #E2E8F0!important;}
+/* ── Sidebar ────────────────────────────────────── */
+section[data-testid="stSidebar"]{
+  background:#FFFFFF !important;
+  border-right:1px solid #E2E8F0 !important;
+}
 .sb-sec{
-  font-size:9px;font-weight:800;color:#94A3B8;
-  text-transform:uppercase;letter-spacing:2px;
-  margin:14px 0 7px;padding-top:12px;
+  font-size:9px; font-weight:800; color:#94A3B8;
+  text-transform:uppercase; letter-spacing:2px;
+  margin:14px 0 7px; padding-top:12px;
   border-top:1px solid #F1F5F9;
 }
-.sb-sec:first-child{border-top:none;padding-top:0;}
 
-/* ─── Dataframe ──────────────────────────────────── */
-[data-testid="stDataFrame"]{border-radius:8px!important;overflow:hidden;border:1px solid #E2E8F0;}
-.dataframe{font-size:12px!important;}
-
-/* ─── Chat ───────────────────────────────────────── */
-.user-bubble{
-  background:#0F172A;color:#F8FAFC;
-  padding:10px 16px;border-radius:16px 16px 3px 16px;
-  max-width:74%;font-size:13px;line-height:1.5;
-  margin:5px 0;box-shadow:0 2px 8px rgba(15,23,42,0.2);
-}
-.ai-bubble{
-  background:#FFFFFF;border:1px solid #E2E8F0;color:#1E293B;
-  padding:10px 16px;border-radius:16px 16px 16px 3px;
-  max-width:80%;font-size:13px;line-height:1.6;
-  margin:5px 0;box-shadow:0 1px 3px rgba(0,0,0,0.04);
-}
-.chat-wrap{display:flex;margin:3px 0;}
-.chat-right{justify-content:flex-end;}.chat-left{justify-content:flex-start;}
-
-/* ─── Metrics ────────────────────────────────────── */
-[data-testid="metric-container"]{
-  background:#FFFFFF;border:1px solid #E2E8F0;border-radius:9px;padding:14px 16px;
+/* ── Dataframe ──────────────────────────────────── */
+[data-testid="stDataFrame"]{
+  border-radius:8px !important; overflow:hidden;
+  border:1px solid #E2E8F0;
 }
 
-/* ─── Scrollbar ──────────────────────────────────── */
+/* ── Scrollbar ──────────────────────────────────── */
 ::-webkit-scrollbar{width:5px;height:5px;}
 ::-webkit-scrollbar-track{background:#F8FAFC;}
 ::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:4px;}
 ::-webkit-scrollbar-thumb:hover{background:#94A3B8;}
 
-/* ─── Slider ─────────────────────────────────────── */
-.stSlider [data-baseweb="slider"] div{background:#0F172A!important;}
-.stProgress>div>div{background:#0F172A!important;border-radius:4px!important;}
-</style>
-"""
-
-# ═══════════════════════════════════════════════════════════════
-# IMPORTS
-# ═══════════════════════════════════════════════════════════════
-import streamlit as st
-import streamlit.components.v1 as components
-import pandas as pd
-import numpy as np
-import networkx as nx
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-from dataclasses import dataclass
-from datetime import datetime, timedelta, date
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error
-import json, math, io, re, requests
-import openpyxl
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.chart import BarChart, LineChart, Reference
-from openpyxl.utils import get_column_letter
-import warnings
-warnings.filterwarnings("ignore")
-
-# ═══════════════════════════════════════════════════════════════
-# CUSTOM SVG LOGO (SR + Supply Chain Network)
-# ═══════════════════════════════════════════════════════════════
-LOGO_SVG = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120' width='60' height='60'>
-  <defs>
-    <linearGradient id='bg' x1='0%' y1='0%' x2='100%' y2='100%'>
-      <stop offset='0%' style='stop-color:#1B4F72'/>
-      <stop offset='100%' style='stop-color:#0F6E56'/>
-    </linearGradient>
-  </defs>
-  <circle cx='60' cy='60' r='58' fill='url(#bg)' stroke='#FFFFFF' stroke-width='2.5'/>
-  <circle cx='30' cy='38' r='8' fill='#F39C12' stroke='white' stroke-width='1.5'/>
-  <circle cx='60' cy='22' r='8' fill='#27AE60' stroke='white' stroke-width='1.5'/>
-  <circle cx='90' cy='38' r='8' fill='#E74C3C' stroke='white' stroke-width='1.5'/>
-  <circle cx='38' cy='68' r='8' fill='#9B59B6' stroke='white' stroke-width='1.5'/>
-  <circle cx='82' cy='68' r='8' fill='#2980B9' stroke='white' stroke-width='1.5'/>
-  <circle cx='60' cy='88' r='8' fill='#F39C12' stroke='white' stroke-width='1.5'/>
-  <line x1='30' y1='38' x2='60' y2='22' stroke='#F8C471' stroke-width='2.5'/>
-  <line x1='60' y1='22' x2='90' y2='38' stroke='#7DCEA0' stroke-width='2.5'/>
-  <line x1='30' y1='38' x2='38' y2='68' stroke='#F8C471' stroke-width='2.5'/>
-  <line x1='90' y1='38' x2='82' y2='68' stroke='#7DCEA0' stroke-width='2.5'/>
-  <line x1='38' y1='68' x2='60' y2='88' stroke='#AED6F1' stroke-width='2.5'/>
-  <line x1='82' y1='68' x2='60' y2='88' stroke='#AED6F1' stroke-width='2.5'/>
-  <line x1='38' y1='68' x2='82' y2='68' stroke='white' stroke-width='1.5' opacity='0.5' stroke-dasharray='3,2'/>
-  <text x='60' y='110' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' font-weight='900' fill='white' letter-spacing='3'>SR</text>
-</svg>"""
-
-LOGO_SIDEBAR = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120' width='42' height='42'>
-  <defs><linearGradient id='bg2' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' style='stop-color:#1B4F72'/><stop offset='100%' style='stop-color:#0F6E56'/></linearGradient></defs>
-  <circle cx='60' cy='60' r='58' fill='url(#bg2)' stroke='#FFFFFF' stroke-width='2'/>
-  <circle cx='30' cy='38' r='7' fill='#F39C12' stroke='white' stroke-width='1.5'/>
-  <circle cx='60' cy='22' r='7' fill='#27AE60' stroke='white' stroke-width='1.5'/>
-  <circle cx='90' cy='38' r='7' fill='#E74C3C' stroke='white' stroke-width='1.5'/>
-  <circle cx='38' cy='68' r='7' fill='#9B59B6' stroke='white' stroke-width='1.5'/>
-  <circle cx='82' cy='68' r='7' fill='#2980B9' stroke='white' stroke-width='1.5'/>
-  <circle cx='60' cy='88' r='7' fill='#F39C12' stroke='white' stroke-width='1.5'/>
-  <line x1='30' y1='38' x2='60' y2='22' stroke='#F8C471' stroke-width='2'/>
-  <line x1='60' y1='22' x2='90' y2='38' stroke='#7DCEA0' stroke-width='2'/>
-  <line x1='30' y1='38' x2='38' y2='68' stroke='#F8C471' stroke-width='2'/>
-  <line x1='90' y1='38' x2='82' y2='68' stroke='#7DCEA0' stroke-width='2'/>
-  <line x1='38' y1='68' x2='60' y2='88' stroke='#AED6F1' stroke-width='2'/>
-  <line x1='82' y1='68' x2='60' y2='88' stroke='#AED6F1' stroke-width='2'/>
-  <text x='60' y='110' text-anchor='middle' font-family='Arial,sans-serif' font-size='12' font-weight='900' fill='white' letter-spacing='2'>SR</text>
-</svg>"""
-
-# ═══════════════════════════════════════════════════════════════
-# DATA MODELS
-# ═══════════════════════════════════════════════════════════════
-@dataclass
-class Node:
-    id: str; name: str; node_type: str; capacity: float
-    location: str = ""; x: float = 0.0; y: float = 0.0
-
-@dataclass
-class Edge:
-    source: str; target: str; capacity: float
-    cost: float = 1.0; active: bool = True
-
-# ═══════════════════════════════════════════════════════════════
-# TRANSPORT LOGIC
-# ═══════════════════════════════════════════════════════════════
-TRANSPORT_MODES = {
-    "road":  {"speed_kmh": 60,  "cost_per_km": 2.5,  "label": "Road (Truck)",  "icon": "Truck"},
-    "rail":  {"speed_kmh": 80,  "cost_per_km": 1.2,  "label": "Rail",          "icon": "Rail"},
-    "air":   {"speed_kmh": 800, "cost_per_km": 12.0,  "label": "Air",           "icon": "Air"},
-    "sea":   {"speed_kmh": 35,  "cost_per_km": 0.8,  "label": "Sea/Inland",    "icon": "Sea"},
+/* ── Metrics ────────────────────────────────────── */
+[data-testid="metric-container"]{
+  background:#FFFFFF; border:1px solid #E2E8F0;
+  border-radius:9px; padding:14px 16px;
 }
 
-def haversine_km(lat1, lon1, lat2, lon2):
-    """Distance between two lat/lon points in km"""
-    R = 6371
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
-    return R * 2 * math.asin(math.sqrt(a))
-
-def get_state(location_str):
-    """Extract state from 'City, State' format"""
-    parts = location_str.split(",")
-    return parts[-1].strip().lower() if len(parts) > 1 else location_str.strip().lower()
-
-def recommend_transport(src_node, tgt_node, load_units, urgent=False):
-    """
-    Smart transport mode recommendation based on:
-    - Same city/state → road
-    - Load size → truck / rail / air
-    - Urgent → air
-    - Distance → affects mode
-    """
-    src_loc = src_node.location; tgt_loc = tgt_node.location
-    src_state = get_state(src_loc); tgt_state = get_state(tgt_loc)
-    same_state = (src_state == tgt_state)
-
-    # Compute distance if coordinates available
-    dist_km = 0
-    if src_node.x and src_node.y and tgt_node.x and tgt_node.y:
-        dist_km = haversine_km(src_node.y, src_node.x, tgt_node.y, tgt_node.x)
-
-    recommendations = []
-
-    if urgent:
-        mode = "air"
-        reason = "Urgent delivery — air freight selected"
-    elif same_state or dist_km < 150:
-        mode = "road"
-        reason = "Same region — road transport (cheapest)"
-    elif load_units >= 500:
-        mode = "rail"
-        reason = f"High load ({load_units} units) — rail preferred"
-    elif load_units >= 150:
-        # Offer both
-        mode = "rail"
-        reason = f"Medium load ({load_units} units) — rail recommended"
-    else:
-        mode = "road"
-        reason = f"Small load ({load_units} units) — road (truck)"
-
-    m = TRANSPORT_MODES[mode]
-    if dist_km > 0:
-        cost = dist_km * m["cost_per_km"]
-        hours = dist_km / m["speed_kmh"]
-        days = hours / 24
-    else:
-        cost = None; hours = None; days = None
-
-    return {
-        "mode": mode, "label": m["label"], "icon": m["icon"],
-        "reason": reason, "dist_km": round(dist_km, 1) if dist_km else None,
-        "cost_estimate": round(cost, 0) if cost else None,
-        "hours": round(hours, 1) if hours else None,
-        "days": round(days, 2) if days else None,
-        "same_state": same_state,
-    }
-
-# ═══════════════════════════════════════════════════════════════
-# GRAPH ENGINE
-# ═══════════════════════════════════════════════════════════════
-class SupplyChainGraph:
-    def __init__(self):
-        self.nodes: dict = {}
-        self.edges: list = []
-
-    def add_node(self, node): self.nodes[node.id] = node
-
-    def add_edge(self, edge):
-        if edge.source not in self.nodes or edge.target not in self.nodes:
-            raise ValueError(f"Node {edge.source} or {edge.target} not found")
-        for e in self.edges:
-            if e.source == edge.source and e.target == edge.target: return
-        self.edges.append(edge)
-
-    def remove_edge(self, src, tgt):
-        self.edges = [e for e in self.edges if not (e.source==src and e.target==tgt)]
-
-    def toggle_edge(self, src, tgt, active):
-        for e in self.edges:
-            if e.source==src and e.target==tgt: e.active = active
-
-    def to_nx(self):
-        G = nx.DiGraph()
-        for nid, n in self.nodes.items(): G.add_node(nid, vars(n))
-        for e in self.edges:
-            if e.active:
-                G.add_edge(e.source, e.target, capacity=e.capacity, weight=e.cost)
-        return G
-
-    def geo_shortest_path(self, src, tgt):
-        """Shortest path using real lat/lon distances as weights"""
-        G = nx.DiGraph()
-        for nid, n in self.nodes.items(): G.add_node(nid, vars(n))
-        for e in self.edges:
-            if not e.active: continue
-            sn = self.nodes[e.source]; tn = self.nodes[e.target]
-            if sn.x and sn.y and tn.x and tn.y:
-                dist = haversine_km(sn.y, sn.x, tn.y, tn.x)
-                w = dist if dist > 0 else e.cost
-            else:
-                w = e.cost
-            G.add_edge(e.source, e.target, capacity=e.capacity, weight=w, cost=e.cost)
-        try:
-            path = nx.dijkstra_path(G, src, tgt, weight="weight")
-            total_dist = sum(
-                haversine_km(self.nodes[path[i]].y, self.nodes[path[i]].x,
-                             self.nodes[path[i+1]].y, self.nodes[path[i+1]].x)
-                if (self.nodes[path[i]].x and self.nodes[path[i+1]].x) else 0
-                for i in range(len(path)-1)
-            )
-            total_cost = sum(G[path[i]][path[i+1]].get("cost", 1) for i in range(len(path)-1))
-            return {"found": True, "path": path, "dist_km": round(total_dist, 1), "cost": round(total_cost, 2)}
-        except:
-            return {"found": False, "path": [], "dist_km": None, "cost": None}
-
-    def shortest_path(self, src, tgt):
-        return self.geo_shortest_path(src, tgt)
-
-    def all_shortest_paths(self, src, tgt, k=3):
-        G = self.to_nx(); results = []
-        try:
-            for path in nx.shortest_simple_paths(G, src, tgt, weight="weight"):
-                cost = sum(G[path[i]][path[i+1]]["weight"] for i in range(len(path)-1))
-                results.append({"path": path, "cost": round(cost, 2)})
-                if len(results) >= k: break
-        except: pass
-        return results
-
-    def demand_fulfillment(self):
-        G = self.to_nx()
-        plants  = [n for n, d in self.nodes.items() if d.node_type=="plant"]
-        demands = [n for n, d in self.nodes.items() if d.node_type=="demand"]
-        results = {}
-        for d_id in demands:
-            req = self.nodes[d_id].capacity; total, reach = 0.0, []
-            for p in plants:
-                try:
-                    fv, _ = nx.maximum_flow(G, p, d_id, capacity="capacity")
-                    if fv > 0: total += fv; reach.append(p)
-                except: pass
-            ful = min(total, req)
-            results[d_id] = {"required": req, "fulfilled": round(ful, 2),
-                             "pct": round(ful/req*100 if req>0 else 100, 1),
-                             "reachable_from": reach}
-        return results
-
-    def simulate_disruption(self, src, tgt):
-        baseline = self.demand_fulfillment()
-        self.toggle_edge(src, tgt, False)
-        disrupted = self.demand_fulfillment()
-        self.toggle_edge(src, tgt, True)
-        impact = {}
-        for d_id, base in baseline.items():
-            dis = disrupted[d_id]; drop = base["pct"] - dis["pct"]
-            impact[d_id] = {
-                "demand_name": self.nodes[d_id].name,
-                "before_pct": base["pct"], "after_pct": dis["pct"],
-                "drop_pct": round(drop,1), "before_fulfilled": base["fulfilled"],
-                "after_fulfilled": dis["fulfilled"],
-                "lost_units": round(base["fulfilled"]-dis["fulfilled"],2),
-                "severity": "critical" if drop>=50 else "high" if drop>=25 else "medium" if drop>0 else "none"
-            }
-        alt_paths = {}
-        for d_id, imp in impact.items():
-            if imp["drop_pct"] > 0:
-                self.toggle_edge(src, tgt, False)
-                paths = []
-                for p in [n for n, nd in self.nodes.items() if nd.node_type=="plant"]:
-                    r = self.shortest_path(p, d_id)
-                    if r["found"]:
-                        paths.append({"from_plant": self.nodes[p].name,
-                                      "path": [self.nodes[n].name for n in r["path"]],
-                                      "path_ids": r["path"], "cost": r["cost"]})
-                paths.sort(key=lambda x: x["cost"])
-                alt_paths[d_id] = paths[:3]
-                self.toggle_edge(src, tgt, True)
-        avg_drop = sum(v["drop_pct"] for v in impact.values())/len(impact) if impact else 0
-        return {"removed_edge": f"{self.nodes[src].name} → {self.nodes[tgt].name}",
-                "removed_src": src, "removed_tgt": tgt,
-                "resilience_score": round(max(0, 100-avg_drop), 1),
-                "impact": impact, "alt_paths": alt_paths}
-
-    def rank_critical_edges(self):
-        ranking = []
-        for e in self.edges:
-            if not e.active: continue
-            r = self.simulate_disruption(e.source, e.target)
-            avg = sum(v["drop_pct"] for v in r["impact"].values())/len(r["impact"]) if r["impact"] else 0
-            ranking.append({"source":e.source,"target":e.target,"label":r["removed_edge"],
-                "avg_fulfillment_drop":round(avg,1),"resilience_score":r["resilience_score"],
-                "severity":"critical" if avg>=50 else "high" if avg>=25 else "medium" if avg>=5 else "low"})
-        return sorted(ranking, key=lambda x: x["avg_fulfillment_drop"], reverse=True)
-
-    def to_dict(self):
-        return {"nodes":[vars(n) for n in self.nodes.values()],"edges":[vars(e) for e in self.edges]}
-
-
-# ═══════════════════════════════════════════════════════════════
-# INVENTORY MANAGER
-# ═══════════════════════════════════════════════════════════════
-class InventoryManager:
-    def __init__(self):
-        self.items = {}; self.stock = {}
-
-    def add_item(self, iid, name, unit="units"):
-        self.items[iid] = {"name": name, "unit": unit}
-
-    def set_stock(self, node_id, iid, current, safety, reorder, daily_demand=1.0):
-        if node_id not in self.stock: self.stock[node_id] = {}
-        self.stock[node_id][iid] = {"current":float(current),"safety":float(safety),
-                                     "reorder":float(reorder),"daily_demand":float(daily_demand)}
-
-    def update_stock(self, node_id, iid, delta):
-        if node_id in self.stock and iid in self.stock[node_id]:
-            self.stock[node_id][iid]["current"] = max(0.0, self.stock[node_id][iid]["current"]+delta)
-            return True
-        return False
-
-    def coverage_days(self, node_id, iid):
-        if node_id in self.stock and iid in self.stock[node_id]:
-            s = self.stock[node_id][iid]; dd = s.get("daily_demand",1)
-            return round(s["current"]/dd,1) if dd>0 else 999
-        return None
-
-    def get_alerts(self, sc_nodes=None):
-        alerts = []
-        for node_id, items in self.stock.items():
-            nn = sc_nodes[node_id].name if sc_nodes and node_id in sc_nodes else node_id
-            for iid, s in items.items():
-                iname = self.items.get(iid,{}).get("name",iid)
-                if s["current"] <= s["reorder"]:
-                    alerts.append({"node_id":node_id,"node_name":nn,"item_id":iid,"item_name":iname,
-                        "level":"critical" if s["current"]<=s["safety"] else "warning",
-                        "current":s["current"],"safety":s["safety"],"reorder":s["reorder"],
-                        "coverage":self.coverage_days(node_id,iid)})
-        return sorted(alerts, key=lambda x:(x["level"]!="critical", x["coverage"] or 999))
-
-    def find_alternatives(self, demand_id, iid, required, sc, disrupted=None):
-        alts = []
-        for node_id, items in self.stock.items():
-            if node_id==demand_id or iid not in items: continue
-            s=items[iid]; avail=max(0.0, s["current"]-s["safety"])
-            if avail<=0: continue
-            if disrupted: sc.toggle_edge(disrupted[0], disrupted[1], False)
-            r = sc.shortest_path(node_id, demand_id)
-            if disrupted: sc.toggle_edge(disrupted[0], disrupted[1], True)
-            if r["found"]:
-                alts.append({"node_id":node_id,
-                    "node_name":sc.nodes[node_id].name if node_id in sc.nodes else node_id,
-                    "available":avail,"can_cover":avail>=required,
-                    "coverage_pct":min(100, round(avail/max(required,1)*100,1)),
-                    "path":[sc.nodes[n].name for n in r["path"] if n in sc.nodes],
-                    "path_ids":r["path"],"route_cost":r["cost"],
-                    "coverage_days":self.coverage_days(node_id,iid)})
-        return sorted(alts, key=lambda x:(-x["coverage_pct"], x["route_cost"]))[:5]
-
-    def to_df(self, sc_nodes=None):
-        rows = []
-        for node_id, items in self.stock.items():
-            nn = sc_nodes[node_id].name if sc_nodes and node_id in sc_nodes else node_id
-            nt = sc_nodes[node_id].node_type if sc_nodes and node_id in sc_nodes else ""
-            for iid, s in items.items():
-                iname=self.items.get(iid,{}).get("name",iid); unit=self.items.get(iid,{}).get("unit","units")
-                dd=s.get("daily_demand",1); cov=round(s["current"]/dd,1) if dd>0 else 999
-                status="Critical" if s["current"]<=s["safety"] else "Low" if s["current"]<=s["reorder"] else "Normal"
-                rows.append({"Node":nn,"Type":nt.capitalize(),"Item":iname,"Unit":unit,
-                    "Current Stock":s["current"],"Safety Stock":s["safety"],"Reorder Point":s["reorder"],
-                    "Daily Demand":dd,"Coverage Days":cov,
-                    "Available (above safety)":max(0,s["current"]-s["safety"]),"Status":status})
-        return pd.DataFrame(rows)
-
-
-# ═══════════════════════════════════════════════════════════════
-# DEMAND FORECASTER
-# ═══════════════════════════════════════════════════════════════
-class DemandForecaster:
-    def __init__(self):
-        self.models={}; self.history={}; self.forecasts={}; self.metrics={}
-
-    def generate_synthetic_history(self, node_id, node_name, base_demand, days=365, seed=None):
-        if seed is None: seed=hash(node_id)%1000
-        np.random.seed(seed); t=np.arange(days)
-        demand=np.maximum(0, base_demand+0.05*t+base_demand*0.15*np.sin(2*np.pi*t/7)+
-                          base_demand*0.20*np.sin(2*np.pi*t/365)+np.random.normal(0,base_demand*0.08,days))
-        dates=[datetime.today()-timedelta(days=days-i) for i in range(days)]
-        df=pd.DataFrame({"date":dates,"demand":demand,"node_id":node_id,"node_name":node_name})
-        self.history[node_id]=df; return df
-
-    def _make_features(self, y, lags=[1,7,14,30]):
-        ml=max(lags); X,yo=[],[]
-        for i in range(ml, len(y)):
-            feats=[i,i%7,i%30,i//30]
-            for lag in lags: feats.append(float(y[i-lag]))
-            feats.append(float(np.mean(y[max(0,i-7):i]))); feats.append(float(np.mean(y[max(0,i-30):i])))
-            X.append(feats); yo.append(float(y[i]))
-        return np.array(X,dtype=float), np.array(yo,dtype=float)
-
-    def train(self, node_id, horizon=30):
-        if node_id not in self.history: return None
-        df=self.history[node_id]; y=df["demand"].values
-        X,yt=self._make_features(y); split=max(int(len(X)*0.80),1)
-        rf=RandomForestRegressor(n_estimators=100,max_depth=6,random_state=42,n_jobs=-1)
-        gbm=GradientBoostingRegressor(n_estimators=80,max_depth=4,learning_rate=0.1,random_state=42)
-        rf.fit(X[:split],yt[:split]); gbm.fit(X[:split],yt[:split])
-        if split<len(X):
-            ep=0.5*rf.predict(X[split:])+0.5*gbm.predict(X[split:])
-            yv=yt[split:]
-            rmse=float(np.sqrt(mean_squared_error(yv,ep))); mae=float(mean_absolute_error(yv,ep))
-            mape=float(np.mean(np.abs((yv-ep)/(yv+1e-6)))*100)
-            r2=float(1-np.sum((yv-ep)**2)/np.sum((yv-np.mean(yv))**2))
-        else:
-            rmse=0;mae=0;mape=0;r2=1
-        self.models[node_id]=(rf,gbm)
-        self.metrics[node_id]={"rmse":round(rmse,2),"mae":round(mae,2),"mape":round(mape,2),"r2":round(r2,3)}
-        hv=list(y); fp=[]
-        for step in range(horizon):
-            i=len(hv); lags=[1,7,14,30]
-            feats=[i,i%7,i%30,i//30]
-            for lag in lags: feats.append(float(hv[-lag]) if lag<=len(hv) else float(np.mean(hv[-min(lag,len(hv)):])))
-            feats.append(float(np.mean(hv[-7:]))); feats.append(float(np.mean(hv[-30:])))
-            arr=np.array(feats,dtype=float).reshape(1,-1)
-            pred=max(0, 0.5*rf.predict(arr)[0]+0.5*gbm.predict(arr)[0])
-            fp.append(pred); hv.append(pred)
-        ld=df["date"].iloc[-1]; fd=[ld+timedelta(days=i+1) for i in range(horizon)]
-        fdf=pd.DataFrame({"date":fd,"forecast":fp,"node_id":node_id,"node_name":df["node_name"].iloc[0]})
-        fdf["upper"]=fdf["forecast"]+1.5*rmse; fdf["lower"]=np.maximum(0,fdf["forecast"]-1.5*rmse)
-        self.forecasts[node_id]=fdf; return fdf
-
-    def aggregate_to_warehouses(self, sc, horizon=30):
-        wh_fc={}
-        for wid, wh in sc.nodes.items():
-            if wh.node_type!="warehouse": continue
-            G=sc.to_nx(); served=[]
-            for did, d in sc.nodes.items():
-                if d.node_type=="demand":
-                    try: nx.shortest_path(G,wid,did); served.append(did)
-                    except: pass
-            total=np.zeros(horizon)
-            for did in served:
-                if did in self.forecasts:
-                    vals=self.forecasts[did]["forecast"].values[:horizon]; total[:len(vals)]+=vals
-            wh_fc[wid]={"name":wh.name,"forecast":total.tolist(),"served_demands":served}
-        return wh_fc
-
-    def get_plant_requirements(self, sc, wh_fc, horizon=30):
-        pr={}
-        for pid, p in sc.nodes.items():
-            if p.node_type!="plant": continue
-            G=sc.to_nx(); served=[]
-            for wid in wh_fc:
-                try: nx.shortest_path(G,pid,wid); served.append(wid)
-                except: pass
-            total=np.zeros(horizon)
-            for wid in served: total+=np.array(wh_fc[wid]["forecast"][:horizon])
-            pr[pid]={"name":p.name,"required":total.tolist(),"capacity":p.capacity,"served_wh":served}
-        return pr
-
-
-# ═══════════════════════════════════════════════════════════════
-# REPORT GENERATOR
-# ═══════════════════════════════════════════════════════════════
-def generate_excel_report(sc, inv, forecaster, ranking, start_date, end_date):
-    """Comprehensive Excel report with color-coded data and embedded charts"""
-    wb = openpyxl.Workbook()
-
-    # Styles
-    fill_green  = PatternFill("solid", fgColor="DCFCE7")
-    fill_yellow = PatternFill("solid", fgColor="FEF3C7")
-    fill_red    = PatternFill("solid", fgColor="FEE2E2")
-    fill_blue   = PatternFill("solid", fgColor="DBEAFE")
-    fill_hdr    = PatternFill("solid", fgColor="1E3A5F")
-    fill_sub    = PatternFill("solid", fgColor="EFF6FF")
-    fill_alt    = PatternFill("solid", fgColor="F8FAFC")
-
-    fnt_hdr  = Font(bold=True, color="FFFFFF", size=11, name="Calibri")
-    fnt_title= Font(bold=True, size=15, color="1E3A5F", name="Calibri")
-    fnt_sub  = Font(bold=True, size=12, color="334155", name="Calibri")
-    fnt_bold = Font(bold=True, size=10, name="Calibri")
-    fnt_norm = Font(size=10, name="Calibri")
-    fnt_sm   = Font(size=9, color="64748B", name="Calibri")
-    aln_c    = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    aln_l    = Alignment(horizontal="left",   vertical="center", wrap_text=True)
-    thin     = Side(style="thin", color="E2E8F0")
-    bdr      = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-    def hdr_row(ws, row, cols):
-        for c in range(1, cols+1):
-            cell=ws.cell(row=row,column=c)
-            cell.fill=fill_hdr; cell.font=fnt_hdr; cell.alignment=aln_c; cell.border=bdr
-
-    def data_row(ws, row, cols, fill=None, alt=False):
-        f = fill if fill else (fill_alt if alt else None)
-        for c in range(1, cols+1):
-            cell=ws.cell(row=row,column=c)
-            if f: cell.fill=f
-            cell.font=fnt_norm; cell.border=bdr; cell.alignment=aln_l
-
-    # ═══ SHEET 1 — EXECUTIVE SUMMARY ═══════════════
-    ws = wb.active; ws.title="Executive Summary"
-    ws.sheet_view.showGridLines=False
-    for col,w in zip("ABCDEFG",[28,16,16,16,16,16,14]):
-        ws.column_dimensions[col].width=w
-
-    ws.merge_cells("A1:G1")
-    ws["A1"]="SUPPLY CHAIN & OPERATIONS — EXECUTIVE REPORT"
-    ws["A1"].font=Font(bold=True,size=16,color="1E3A5F",name="Calibri")
-    ws["A1"].alignment=aln_c
-    ws["A1"].fill=PatternFill("solid",fgColor="EFF6FF")
-    ws.row_dimensions[1].height=36
-
-    ws.merge_cells("A2:G2")
-    ws["A2"]=f"Period: {start_date} to {end_date}  |  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SR Supply Chain & Operations Helper"
-    ws["A2"].font=fnt_sm; ws["A2"].alignment=aln_c
-
-    plants=[n for n in sc.nodes.values() if n.node_type=="plant"]
-    whs_  =[n for n in sc.nodes.values() if n.node_type=="warehouse"]
-    dems_ =[n for n in sc.nodes.values() if n.node_type=="demand"]
-    total_cap=sum(n.capacity for n in plants); total_dem=sum(n.capacity for n in dems_)
-    cov=round(total_cap/max(total_dem,1)*100,1)
-
-    # KPI row
-    kpis=[("Plants",len(plants),"1E3A5F"),("Warehouses",len(whs_),"1E3A5F"),
-          ("Demand Points",len(dems_),"1E3A5F"),("Connections",len(sc.edges),"1E3A5F"),
-          ("Plant Capacity",f"{total_cap:,.0f}","14532D"),
-          ("Total Demand",f"{total_dem:,.0f}","1E3A5F"),
-          ("Coverage",f"{cov}%","14532D" if cov>=100 else "91241C")]
-    for c,(lbl,val,col) in enumerate(kpis,start=1):
-        ws.cell(row=4,column=c,value=lbl).font=Font(size=9,bold=True,color="94A3B8",name="Calibri")
-        ws.cell(row=4,column=c).alignment=aln_c
-        ws.cell(row=5,column=c,value=val).font=Font(size=13,bold=True,color=col,name="Calibri")
-        ws.cell(row=5,column=c).alignment=aln_c
-        ws.cell(row=5,column=c).fill=fill_sub
-    ws.row_dimensions[5].height=28
-
-    # Demand fulfillment table
-    ws.cell(row=7,column=1,value="DEMAND FULFILLMENT OVERVIEW").font=fnt_sub
-    ff=sc.demand_fulfillment()
-    hff=["Demand Point","Required","Fulfilled","Fulfillment %","Status"]
-    for c,h in enumerate(hff,1): ws.cell(row=8,column=c,value=h)
-    hdr_row(ws,8,len(hff))
-    r=9
-    for did,info in ff.items():
-        pct=info["pct"]; status="On Target" if pct>=90 else "At Risk" if pct>=60 else "Shortage"
-        fill=fill_green if pct>=90 else fill_yellow if pct>=60 else fill_red
-        for c,v in enumerate([sc.nodes[did].name,info["required"],info["fulfilled"],f"{pct}%",status],1):
-            ws.cell(row=r,column=c,value=v)
-        data_row(ws,r,len(hff),fill); r+=1
-
-    # Chart: Demand fulfillment
-    chart1=BarChart(); chart1.type="col"
-    chart1.title="Demand Fulfillment (%)"; chart1.style=10
-    chart1.y_axis.title="Fulfillment (%)"; chart1.y_axis.scaling.max=110
-    d_ref=Reference(ws,min_col=4,min_row=8,max_row=r-1)
-    c_ref=Reference(ws,min_col=1,min_row=9,max_row=r-1)
-    chart1.add_data(d_ref,titles_from_data=True); chart1.set_categories(c_ref)
-    chart1.height=12; chart1.width=20; ws.add_chart(chart1,f"A{r+1}")
-
-    # ═══ SHEET 2 — INVENTORY ══════════════════════
-    ws2=wb.create_sheet("Inventory Status")
-    ws2.sheet_view.showGridLines=False
-    for col,w in zip("ABCDEFGHIJK",[22,13,16,9,13,13,13,11,13,16,11]):
-        ws2.column_dimensions[col].width=w
-
-    ws2.merge_cells("A1:K1"); ws2["A1"]="INVENTORY STATUS REPORT"
-    ws2["A1"].font=fnt_title; ws2["A1"].alignment=aln_c
-    ws2["A1"].fill=PatternFill("solid",fgColor="EFF6FF"); ws2.row_dimensions[1].height=30
-
-    inv_df=inv.to_df(sc.nodes)
-    hdr2=["Node","Type","Item","Unit","Current","Safety","Reorder","Daily Demand","Coverage Days","Available","Status"]
-    for c,h in enumerate(hdr2,1): ws2.cell(row=3,column=c,value=h)
-    hdr_row(ws2,3,len(hdr2))
-    for alt,(idx,rd) in enumerate(inv_df.iterrows()):
-        r2=alt+4; st2=rd["Status"]
-        fill=fill_green if st2=="Normal" else fill_blue if st2=="Low" else fill_red
-        vals=[rd["Node"],rd["Type"],rd["Item"],rd["Unit"],rd["Current Stock"],rd["Safety Stock"],
-              rd["Reorder Point"],rd["Daily Demand"],rd["Coverage Days"],rd["Available (above safety)"],st2]
-        for c,v in enumerate(vals,1): ws2.cell(row=r2,column=c,value=v)
-        data_row(ws2,r2,len(hdr2),fill,alt%2==0)
-
-    n_inv=len(inv_df)
-    # Chart: Stock levels
-    chart2=BarChart(); chart2.type="col"
-    chart2.title="Current vs Safety Stock by Item"; chart2.style=10
-    chart2.y_axis.title="Units"
-    cur_r=Reference(ws2,min_col=5,min_row=3,max_row=3+n_inv)
-    saf_r=Reference(ws2,min_col=6,min_row=3,max_row=3+n_inv)
-    cat_r=Reference(ws2,min_col=3,min_row=4,max_row=3+n_inv)
-    chart2.add_data(cur_r,titles_from_data=True); chart2.add_data(saf_r,titles_from_data=True)
-    chart2.set_categories(cat_r); chart2.height=13; chart2.width=24
-    ws2.add_chart(chart2,f"A{n_inv+6}")
-
-    # Chart: Coverage days
-    chart3=LineChart(); chart3.title="Coverage Days per Item"; chart3.style=10
-    chart3.y_axis.title="Days"
-    cov_r=Reference(ws2,min_col=9,min_row=3,max_row=3+n_inv)
-    chart3.add_data(cov_r,titles_from_data=True); chart3.set_categories(cat_r)
-    chart3.height=12; chart3.width=22; ws2.add_chart(chart3,f"A{n_inv+26}")
-
-    # ═══ SHEET 3 — RISK ANALYSIS ══════════════════
-    ws3=wb.create_sheet("Risk Analysis")
-    ws3.sheet_view.showGridLines=False
-    for col,w in zip("ABCDE",[30,20,18,14,30]):
-        ws3.column_dimensions[col].width=w
-
-    ws3.merge_cells("A1:E1"); ws3["A1"]="RISK ANALYSIS — CRITICAL CONNECTIONS"
-    ws3["A1"].font=fnt_title; ws3["A1"].alignment=aln_c
-    ws3["A1"].fill=PatternFill("solid",fgColor="FEF2F2"); ws3.row_dimensions[1].height=30
-
-    rmap={"critical":"URGENT: Add redundant path immediately","high":"HIGH: Plan backup within 30 days",
-          "medium":"MEDIUM: Monitor quarterly","low":"LOW: Well-redundant, monitor"}
-    hdr3=["Connection","Avg Drop","Resilience","Severity","Recommendation"]
-    for c,h in enumerate(hdr3,1): ws3.cell(row=3,column=c,value=h)
-    hdr_row(ws3,3,len(hdr3))
-    for alt2,rec in enumerate(ranking or [],start=4):
-        sev=rec["severity"]
-        fill=fill_red if sev=="critical" else fill_yellow if sev=="high" else fill_blue if sev=="medium" else fill_green
-        for c,v in enumerate([rec["label"],f"{rec['avg_fulfillment_drop']}%",f"{rec['resilience_score']}%",sev.upper(),rmap.get(sev,"")],1):
-            ws3.cell(row=alt2,column=c,value=v)
-        data_row(ws3,alt2,len(hdr3),fill)
-
-    if ranking:
-        nr=len(ranking)
-        chart4=BarChart(); chart4.type="bar"; chart4.title="Connection Criticality (Avg Drop %)"; chart4.style=10
-        chart4.x_axis.title="Drop (%)"
-        dr=Reference(ws3,min_col=2,min_row=3,max_row=3+nr)
-        cr=Reference(ws3,min_col=1,min_row=4,max_row=3+nr)
-        chart4.add_data(dr,titles_from_data=True); chart4.set_categories(cr)
-        chart4.height=max(12,nr*1.8); chart4.width=22; ws3.add_chart(chart4,f"A{nr+6}")
-
-    # ═══ SHEET 4 — FORECAST ═══════════════════════
-    ws4=wb.create_sheet("Demand Forecast")
-    ws4.sheet_view.showGridLines=False
-    for col,w in zip("ABCDEF",[18,13,13,13,13,14]):
-        ws4.column_dimensions[col].width=w
-
-    ws4.merge_cells("A1:F1"); ws4["A1"]="DEMAND FORECASTING REPORT"
-    ws4["A1"].font=fnt_title; ws4["A1"].alignment=aln_c
-    ws4["A1"].fill=PatternFill("solid",fgColor="F0FDF4"); ws4.row_dimensions[1].height=30
-
-    row4=3
-    for node_id,fdf in (forecaster.forecasts or {}).items():
-        ws4.merge_cells(f"A{row4}:F{row4}")
-        ws4.cell(row=row4,column=1,value=f"Forecast: {fdf['node_name'].iloc[0]}").font=fnt_sub
-        ws4.row_dimensions[row4].height=22; row4+=1
-        if node_id in forecaster.metrics:
-            m=forecaster.metrics[node_id]
-            ws4.merge_cells(f"A{row4}:F{row4}")
-            ws4.cell(row=row4,column=1,value=f"RMSE: {m['rmse']}  MAE: {m['mae']}  MAPE: {m['mape']}%  R2: {m['r2']}").font=fnt_sm
-            row4+=1
-        hdr4=["Date","Forecast","Lower CI","Upper CI"]
-        for c,h in enumerate(hdr4,1): ws4.cell(row=row4,column=c,value=h)
-        hdr_row(ws4,row4,4); ds=row4+1; row4+=1
-        for alt3,(idx3,fr) in enumerate(fdf.iterrows()):
-            for c,v in enumerate([str(fr["date"])[:10],round(fr["forecast"],1),round(fr["lower"],1),round(fr["upper"],1)],1):
-                ws4.cell(row=row4,column=c,value=v)
-            data_row(ws4,row4,4,fill_blue if alt3%2==0 else None); row4+=1
-        nf=len(fdf); chart5=LineChart(); chart5.title=f"Forecast: {fdf['node_name'].iloc[0]}"; chart5.style=10
-        chart5.y_axis.title="Units"
-        fr_ref=Reference(ws4,min_col=2,min_row=ds-1,max_row=ds+nf-1)
-        lo_ref=Reference(ws4,min_col=3,min_row=ds-1,max_row=ds+nf-1)
-        hi_ref=Reference(ws4,min_col=4,min_row=ds-1,max_row=ds+nf-1)
-        chart5.add_data(fr_ref,titles_from_data=True); chart5.add_data(lo_ref,titles_from_data=True)
-        chart5.add_data(hi_ref,titles_from_data=True)
-        chart5.height=12; chart5.width=22; ws4.add_chart(chart5,f"A{row4+1}"); row4+=20
-
-    # ═══ SHEET 5 — SCORECARD ══════════════════════
-    ws5=wb.create_sheet("Supplier Scorecard")
-    ws5.sheet_view.showGridLines=False
-    for col,w in zip("ABCDEFG",[22,13,13,13,15,14,9]):
-        ws5.column_dimensions[col].width=w
-    ws5.merge_cells("A1:G1"); ws5["A1"]="SUPPLIER & NODE PERFORMANCE SCORECARD"
-    ws5["A1"].font=fnt_title; ws5["A1"].alignment=aln_c
-    ws5["A1"].fill=PatternFill("solid",fgColor="FFFBEB"); ws5.row_dimensions[1].height=30
-    hdr5=["Node","Type","Reliability","Lead Time","Quality","Cost Efficiency","Grade"]
-    for c,h in enumerate(hdr5,1): ws5.cell(row=3,column=c,value=h)
-    hdr_row(ws5,3,len(hdr5))
-    scores_ss=st.session_state.get("scores",{})
-    row5=4
-    for nid,node in sc.nodes.items():
-        if node.node_type not in ("plant","warehouse") or nid not in scores_ss: continue
-        s=scores_ss[nid]; ov=round((s["reliability"]+s["lead_time"]+s["quality"]+s["cost_efficiency"])/4,1)
-        grade="A" if ov>=90 else "B" if ov>=75 else "C" if ov>=60 else "D"
-        fill=fill_green if grade=="A" else fill_blue if grade=="B" else fill_yellow if grade=="C" else fill_red
-        for c,v in enumerate([node.name,node.node_type.capitalize(),s["reliability"],s["lead_time"],s["quality"],s["cost_efficiency"],grade],1):
-            ws5.cell(row=row5,column=c,value=v)
-        data_row(ws5,row5,len(hdr5),fill); row5+=1
-    if row5>4:
-        ns=row5-4; chart6=BarChart(); chart6.type="col"; chart6.title="Supplier Performance"; chart6.style=10
-        chart6.y_axis.title="Score"; chart6.y_axis.scaling.max=100
-        cats5=Reference(ws5,min_col=1,min_row=4,max_row=row5-1)
-        for ci in range(3,7):
-            r6=Reference(ws5,min_col=ci,min_row=3,max_row=row5-1)
-            chart6.add_data(r6,titles_from_data=True)
-        chart6.set_categories(cats5); chart6.height=13; chart6.width=24
-        ws5.add_chart(chart6,f"A{row5+2}")
-
-    # ═══ SHEET 6 — ANALYTICS (CVaR + SPC) ═════════
-    ws6=wb.create_sheet("Analytics")
-    ws6.sheet_view.showGridLines=False
-    for col in "ABCDEFGH": ws6.column_dimensions[col].width=16
-    ws6.column_dimensions["A"].width=22
-    ws6.merge_cells("A1:H1"); ws6["A1"]="SUPPLY CHAIN ANALYTICS — RISK & CONTROL"
-    ws6["A1"].font=fnt_title; ws6["A1"].alignment=aln_c
-    ws6["A1"].fill=PatternFill("solid",fgColor="EFF6FF"); ws6.row_dimensions[1].height=30
-
-    ws6.cell(row=3,column=1,value="CVaR (Conditional Value at Risk) Analysis").font=fnt_sub
-    hdr6a=["Demand Point","Mean Demand","Std Dev","VaR 95%","CVaR 95%","Risk Level"]
-    for c,h in enumerate(hdr6a,1): ws6.cell(row=4,column=c,value=h)
-    hdr_row(ws6,4,len(hdr6a))
-    ff2 = get_fulfillment_cached(sc); r6=5
-    for did,info in ff2.items():
-        node=sc.nodes[did]; base=node.capacity; std_d=base*0.15
-        var95=round(base+1.645*std_d,1); cvar95=round(base+2.0*std_d,1)
-        sf=max(0,cvar95-info["fulfilled"]); rl="High" if sf>base*0.3 else "Medium" if sf>base*0.1 else "Low"
-        fill=fill_red if rl=="High" else fill_yellow if rl=="Medium" else fill_green
-        for c,v in enumerate([node.name,round(base,1),round(std_d,1),var95,cvar95,rl],1):
-            ws6.cell(row=r6,column=c,value=v)
-        data_row(ws6,r6,len(hdr6a),fill); r6+=1
-
-    chart7=BarChart(); chart7.type="col"; chart7.title="CVaR Risk by Demand Point"; chart7.style=10
-    chart7.y_axis.title="Units"
-    cv_ref=Reference(ws6,min_col=5,min_row=4,max_row=r6-1)
-    cc_ref=Reference(ws6,min_col=1,min_row=5,max_row=r6-1)
-    chart7.add_data(cv_ref,titles_from_data=True); chart7.set_categories(cc_ref)
-    chart7.height=12; chart7.width=20; ws6.add_chart(chart7,f"A{r6+2}")
-
-    # SPC Control Chart
-    r6c=r6+18
-    ws6.cell(row=r6c,column=1,value="SPC Control Chart — Demand Monitoring").font=fnt_sub; r6c+=1
-    hdr6b=["Period","Demand","UCL","Mean","LCL","In Control"]
-    for c,h in enumerate(hdr6b,1): ws6.cell(row=r6c,column=c,value=h)
-    hdr_row(ws6,r6c,len(hdr6b)); ds6=r6c+1; r6c+=1
-    first_dem=next((n for n in sc.nodes.values() if n.node_type=="demand"),None)
-    if first_dem:
-        np.random.seed(42)
-        dvals=first_dem.capacity+np.random.normal(0,first_dem.capacity*0.08,20)
-        md=np.mean(dvals); sd=np.std(dvals); ucl=md+3*sd; lcl=max(0,md-3*sd)
-        for i,d in enumerate(dvals,1):
-            ic="Yes" if lcl<=d<=ucl else "No"
-            fill=fill_green if ic=="Yes" else fill_red
-            for c,v in enumerate([f"P{i}",round(d,1),round(ucl,1),round(md,1),round(lcl,1),ic],1):
-                ws6.cell(row=r6c,column=c,value=v)
-            data_row(ws6,r6c,len(hdr6b),fill); r6c+=1
-        chart8=LineChart(); chart8.title=f"SPC Control Chart — {first_dem.name}"; chart8.style=10
-        chart8.y_axis.title="Demand Units"
-        for ci in range(2,6):
-            cr8=Reference(ws6,min_col=ci,min_row=ds6-1,max_row=r6c-1)
-            chart8.add_data(cr8,titles_from_data=True)
-        chart8.height=14; chart8.width=28; ws6.add_chart(chart8,f"A{r6c+2}")
-
-    buf=io.BytesIO(); wb.save(buf); buf.seek(0); return buf.getvalue()
-
-
-def load_demo_data():
-    sc=SupplyChainGraph()
-    sc.add_node(Node("P1","Plant Mumbai",  "plant",    500,"Mumbai, Maharashtra",  72.88,19.08))
-    sc.add_node(Node("P2","Plant Chennai", "plant",    400,"Chennai, Tamil Nadu",  80.27,13.08))
-    sc.add_node(Node("P3","Plant Pune",    "plant",    350,"Pune, Maharashtra",    73.86,18.52))
-    sc.add_node(Node("W1","WH North",  "warehouse",400,"Delhi, Delhi",          77.21,28.61))
-    sc.add_node(Node("W2","WH West",   "warehouse",350,"Ahmedabad, Gujarat",    72.57,23.02))
-    sc.add_node(Node("W3","WH East",   "warehouse",300,"Kolkata, West Bengal",  88.36,22.57))
-    sc.add_node(Node("W4","WH South",  "warehouse",280,"Bangalore, Karnataka",  77.59,12.97))
-    sc.add_node(Node("D1","Delhi Market",    "demand",200,"Delhi, Delhi",          77.21,28.61))
-    sc.add_node(Node("D2","Jaipur Market",   "demand",120,"Jaipur, Rajasthan",    75.79,26.91))
-    sc.add_node(Node("D3","Surat Market",    "demand",180,"Surat, Gujarat",       72.83,21.17))
-    sc.add_node(Node("D4","Bhubaneswar Mkt", "demand",100,"Bhubaneswar, Odisha", 85.82,20.30))
-    sc.add_node(Node("D5","Hyderabad Market","demand",160,"Hyderabad, Telangana", 78.49,17.39))
-    sc.add_node(Node("D6","Kochi Market",    "demand",140,"Kochi, Kerala",        76.27, 9.93))
-    for src,tgt,cap,cost in [
-        ("P1","W1",300,2.0),("P1","W2",250,1.5),("P2","W3",200,1.8),
-        ("P2","W4",220,2.2),("P3","W2",180,1.2),("P3","W4",200,1.6),
-        ("P1","W3",150,3.0),("P2","W1",100,3.5),("W1","D1",220,1.0),
-        ("W1","D2",150,1.5),("W2","D2",130,1.2),("W2","D3",200,1.0),
-        ("W3","D4",120,1.0),("W3","D5",130,1.8),("W4","D5",180,1.0),
-        ("W4","D6",160,1.2),("W1","D4",80,2.5),("W2","D6",90,2.0)]:
-        sc.add_edge(Edge(src,tgt,cap,cost))
-    return sc
-
-def load_demo_inventory():
-    inv=InventoryManager()
-    for iid,name,unit in [("SKU001","Rice","Tonnes"),("SKU002","Wheat","Tonnes"),
-                           ("SKU003","Sugar","Tonnes"),("SKU004","Edible Oil","KL")]:
-        inv.add_item(iid,name,unit)
-    for nid,iid,cur,saf,reo,dd in [
-        ("P1","SKU001",520,100,150,22),("P1","SKU002",410,80,120,16),
-        ("P2","SKU002",360,70,110,14),("P2","SKU003",310,60,90,11),
-        ("P3","SKU001",285,55,85,11),("P3","SKU004",205,40,65,9),
-        ("W1","SKU001",185,50,75,9),("W1","SKU002",155,40,65,7),
-        ("W2","SKU001",125,30,55,6),("W2","SKU003",42,25,45,5),
-        ("W2","SKU004",82,20,35,4),("W3","SKU002",92,20,38,5),
-        ("W3","SKU003",18,15,28,4),
-        ("W4","SKU001",62,15,28,4),("W4","SKU004",52,12,22,3)]:
-        inv.set_stock(nid,iid,cur,saf,reo,dd)
-    return inv
-
-def load_demo_scores():
-    return {"P1":{"reliability":92,"lead_time":88,"quality":95,"cost_efficiency":78},
-            "P2":{"reliability":85,"lead_time":91,"quality":89,"cost_efficiency":84},
-            "P3":{"reliability":79,"lead_time":83,"quality":91,"cost_efficiency":90},
-            "W1":{"reliability":94,"lead_time":90,"quality":87,"cost_efficiency":75},
-            "W2":{"reliability":88,"lead_time":85,"quality":82,"cost_efficiency":88},
-            "W3":{"reliability":76,"lead_time":79,"quality":84,"cost_efficiency":92},
-            "W4":{"reliability":82,"lead_time":86,"quality":88,"cost_efficiency":85}}
-
-def create_excel_template():
-    buf=io.BytesIO()
-    with pd.ExcelWriter(buf,engine="openpyxl") as w:
-        pd.DataFrame({"id":["P1","W1","D1"],"name":["Plant 1","Warehouse 1","Market 1"],
-            "node_type":["plant","warehouse","demand"],"capacity":[500,400,200],
-            "location":["Mumbai, Maharashtra","Delhi, Delhi","Jaipur, Rajasthan"],
-            "x_longitude":[72.88,77.21,75.79],"y_latitude":[19.08,28.61,26.91]
-        }).to_excel(w,"Nodes",index=False)
-        pd.DataFrame({"source":["P1","W1"],"target":["W1","D1"],"capacity":[300,200],"cost":[2.0,1.0]
-        }).to_excel(w,"Connections",index=False)
-        pd.DataFrame({"node_id":["P1","W1"],"item_id":["SKU001","SKU001"],
-            "item_name":["Rice","Rice"],"unit":["Tonnes","Tonnes"],
-            "current_stock":[500,180],"safety_stock":[100,50],"reorder_point":[150,70],"daily_demand":[20,8]
-        }).to_excel(w,"Inventory",index=False)
-        pd.DataFrame({"date":["2024-01-01","2024-01-02"],"node_id":["D1","D1"],"demand":[198,205]
-        }).to_excel(w,"Historical_Demand",index=False)
-    buf.seek(0); return buf.getvalue()
-
-
-# ═══════════════════════════════════════════════════════════════
-# VISUALIZATIONS
-# ═══════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════
-# PERSISTENCE — serialize/restore supply chain state
-# ═══════════════════════════════════════════════════════════════
-
-def _sc_to_dict(sc):
-    return {
-        "nodes": [vars(n) for n in sc.nodes.values()],
-        "edges": [{"source":e.source,"target":e.target,
-                   "capacity":e.capacity,"cost":e.cost,"active":e.active}
-                  for e in sc.edges],
-    }
-
-def _dict_to_sc(d):
-    sc = SupplyChainGraph()
-    for n in d.get("nodes", []):
-        try:
-            sc.add_node(Node(n["id"],n["name"],n["node_type"],n["capacity"],
-                             n.get("location",""),n.get("x",0.0),n.get("y",0.0)))
-        except: pass
-    for e in d.get("edges", []):
-        try:
-            sc.add_edge(Edge(e["source"],e["target"],
-                             e["capacity"],e.get("cost",1.0),e.get("active",True)))
-        except: pass
-    return sc
-
-def _inv_to_dict(inv):
-    return {"items": inv.items, "stock": inv.stock}
-
-def _dict_to_inv(d):
-    inv = InventoryManager()
-    inv.items = d.get("items", {})
-    inv.stock  = d.get("stock",  {})
-    return inv
-
-def _build_save_payload(sc, inv, scores, dispatch_log):
-    import json as _j
-    try:
-        return _j.dumps({
-            "v": 3,
-            "sc":       _sc_to_dict(sc),
-            "inv":      _inv_to_dict(inv),
-            "scores":   scores or {},
-            "dispatch": dispatch_log or [],
-        }, separators=(",",":"), default=str)
-    except:
-        return None
-
-def _restore_from_payload(payload_str):
-    import json as _j
-    try:
-        d = _j.loads(payload_str)
-        if d.get("v") != 3:
-            return None
-        return (_dict_to_sc(d["sc"]),
-                _dict_to_inv(d["inv"]),
-                d.get("scores", {}),
-                d.get("dispatch", []))
-    except:
-        return None
-
-def make_save_component(payload_json):
-    """Invisible HTML that writes JSON to localStorage"""
-    import json as _j
-    safe = _j.dumps(payload_json)   # double-encode so any quotes are escaped
-    return (
-        f'<script>'
-        f'try{{localStorage.setItem("sc_platform_v3",{safe});}}catch(e){{}}'
-        f'</script>'
-    )
-
-def make_clear_component():
-    return ('<script>try{localStorage.removeItem("sc_platform_v3");}catch(e){}</script>')
-
-def make_restore_loader():
-    """
-    Injects JS that reads localStorage and writes the value into a
-    hidden Streamlit text-input so Python can read it via st.query_params
-    or via a hidden widget value.
-    """
-    return """
-<script>
-(function(){
-  try {
-    var data = localStorage.getItem('sc_platform_v3') || '';
-    if (data.length > 20) {
-      // Encode and push into URL param so Streamlit can read it on next run
-      // Only do this once per session flag
-      if (!sessionStorage.getItem('sc_restored')) {
-        sessionStorage.setItem('sc_restored', '1');
-        var encoded = encodeURIComponent(data);
-        var url = window.location.href.split('?')[0] + '?_ls=' + encoded;
-        window.history.replaceState(null, '', url);
-        window.location.reload();
-      }
-    }
-  } catch(e) {}
-})();
-</script>"""
-
-# ── Performance: graph hash for cache invalidation ──────────────────
-def _graph_hash(sc):
-    """Cheap fingerprint: node count + edge count + sum of capacities"""
-    return hash((len(sc.nodes), len(sc.edges),
-                 sum(e.capacity for e in sc.edges),
-                 sum(n.capacity for n in sc.nodes.values())))
-
-def get_fulfillment_cached(sc):
-    """Return cached demand fulfillment; recompute only when graph changes"""
-    h = _graph_hash(sc)
-    if (st.session_state.get("_ff_hash") == h and
-            st.session_state.get("_ff_cache") is not None):
-        return st.session_state["_ff_cache"]
-    result = sc.demand_fulfillment()
-    st.session_state["_ff_cache"] = result
-    st.session_state["_ff_hash"]  = h
-    return result
-
-NC={"plant":"#0F6E56","warehouse":"#185FA5","demand":"#993C1D"}
-NS={"plant":"square","warehouse":"diamond","demand":"circle"}
-SEV={"critical":"#E74C3C","high":"#E67E22","medium":"#3498DB","low":"#27AE60","none":"#95A5A6"}
-
-# Green → Yellow → Red heatmap (proper, visible)
-HEATMAP_COLORSCALE=[
-    [0.0,  "#27AE60"],   # bright green — safe
-    [0.25, "#82E0AA"],   # light green
-    [0.50, "#F9E79F"],   # yellow — moderate
-    [0.65, "#F0B27A"],   # orange
-    [0.80, "#E74C3C"],   # red — high risk
-    [1.0,  "#922B21"],   # dark red — critical
-]
-
-def _auto_layout(sc):
-    layers={"plant":[],"warehouse":[],"demand":[]}
-    for nid,n in sc.nodes.items(): layers.get(n.node_type,layers["warehouse"]).append(nid)
-    pos={}
-    for lname,nids in layers.items():
-        x={"plant":0.0,"warehouse":1.0,"demand":2.0}[lname]; n=len(nids)
-        for i,nid in enumerate(nids): pos[nid]=(x,(i-(n-1)/2)*1.5)
-    return pos
-
-def draw_network(sc, highlight_path=None, disrupted_edge=None, show_cap=True, in_transit=None):
-    pos=_auto_layout(sc); hp=highlight_path or []; it=in_transit or []
-    hp_set=set(zip(hp,hp[1:])) if len(hp)>1 else set()
-    it_edges={(d.get("from_id",""),d.get("to_id","")) for d in it if d.get("status")=="In Transit"}
-    large_graph = len(sc.edges) > 60  # skip arrows and cap labels for big graphs
-    traces=[]
-    for e in sc.edges:
-        x0,y0=pos[e.source]; x1,y1=pos[e.target]
-        is_dis=disrupted_edge and e.source==disrupted_edge[0] and e.target==disrupted_edge[1]
-        is_hi=(e.source,e.target) in hp_set; is_it=(e.source,e.target) in it_edges
-        col="#E74C3C" if is_dis else "#E67E22" if is_hi else "#2980B9" if is_it else "#BDC3C7"
-        w=3 if is_hi else 2.5 if is_dis else 2.5 if is_it else 1.5
-        dash="dot" if(not e.active or is_dis) else "solid"
-        ht=f"<b>{sc.nodes[e.source].name} → {sc.nodes[e.target].name}</b><br>Capacity: {e.capacity} | Cost: {e.cost}"
-        traces.append(go.Scatter(x=[x0,x1,None],y=[y0,y1,None],mode="lines",
-            line=dict(color=col,width=w,dash=dash),hovertext=ht,hoverinfo="text",showlegend=False))
-        if show_cap and not large_graph:
-            mx,my=(x0+x1)/2,(y0+y1)/2
-            traces.append(go.Scatter(x=[mx],y=[my],mode="text",text=[f"{int(e.capacity)}"],
-                textfont=dict(size=9,color=col),showlegend=False,hoverinfo="skip"))
-        if not large_graph:
-            dx,dy=x1-x0,y1-y0; L=math.hypot(dx,dy)
-            if L>0:
-                ux,uy=dx/L,dy/L
-                traces.append(go.Scatter(x=[x1-ux*0.07],y=[y1-uy*0.07],mode="markers",
-                    marker=dict(symbol="arrow",size=10,color=col,angle=math.degrees(math.atan2(-dy,dx))+90),
-                    showlegend=False,hoverinfo="skip"))
-    for ntype in ["plant","warehouse","demand"]:
-        nids=[n for n,nd in sc.nodes.items() if nd.node_type==ntype]
-        if not nids: continue
-        in_p=[n in hp for n in nids]
-        traces.append(go.Scatter(
-            x=[pos[n][0] for n in nids],y=[pos[n][1] for n in nids],
-            mode="markers+text",name=ntype.capitalize()+"s",
-            text=[sc.nodes[n].name for n in nids],
-            textposition="middle left" if ntype=="plant" else "top center" if ntype=="warehouse" else "middle right",
-            textfont=dict(size=11,color="#2C3E50"),
-            hovertext=[f"<b>{sc.nodes[n].name}</b><br>{ntype}<br>Cap:{sc.nodes[n].capacity}<br>{sc.nodes[n].location}" for n in nids],
-            hoverinfo="text",
-            marker=dict(symbol=NS[ntype],size=[22 if ip else 15 for ip in in_p],
-                color=["#E67E22" if ip else NC[ntype] for ip in in_p],
-                line=dict(width=2,color="white"))))
-    fig=go.Figure(data=traces)
-    fig.update_layout(paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",
-        margin=dict(l=10,r=10,t=10,b=10),height=460,hovermode="closest",
-        xaxis=dict(showgrid=False,zeroline=False,showticklabels=False),
-        yaxis=dict(showgrid=False,zeroline=False,showticklabels=False),
-        legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="right",x=1,
-            font=dict(size=11,color="#2C3E50"),bgcolor="rgba(0,0,0,0)"))
-    return fig
-
-def draw_gauge_charts(ff, nodes):
-    demands=list(ff.items()); cols=min(3,len(demands)); rows=math.ceil(len(demands)/cols)
-    specs=[[{"type":"indicator"} for _ in range(cols)] for _ in range(rows)]
-    fig=make_subplots(rows=rows,cols=cols,specs=specs)
-    for i,(d_id,info) in enumerate(demands):
-        c=(i%cols)+1; r=(i//cols)+1; pct=info["pct"]
-        col="#E74C3C" if pct<50 else "#E67E22" if pct<80 else "#27AE60"
-        fig.add_trace(go.Indicator(mode="gauge+number",value=pct,
-            title={"text":nodes[d_id].name,"font":{"size":10,"color":"#2C3E50"}},
-            number={"suffix":"%","font":{"size":16,"color":col}},
-            gauge={"axis":{"range":[0,100],"tickwidth":1},
-                   "bar":{"color":col},
-                   "steps":[{"range":[0,50],"color":"#FADBD8"},{"range":[50,80],"color":"#FDEBD0"},{"range":[80,100],"color":"#D5F5E3"}]}),
-            row=r,col=c)
-    fig.update_layout(height=210*rows,paper_bgcolor="#FFFFFF",margin=dict(l=5,r=5,t=20,b=5))
-    return fig
-
-def draw_impact_chart(impact):
-    names=[v["demand_name"] for v in impact.values()]
-    before=[v["before_pct"] for v in impact.values()]; after=[v["after_pct"] for v in impact.values()]
-    fig=go.Figure()
-    fig.add_trace(go.Bar(name="Before",x=names,y=before,marker_color="#27AE60",
-        text=[f"{v}%" for v in before],textposition="outside",textfont=dict(size=10,color="#2C3E50")))
-    fig.add_trace(go.Bar(name="After",x=names,y=after,marker_color="#E74C3C",
-        text=[f"{v}%" for v in after],textposition="outside",textfont=dict(size=10,color="#2C3E50")))
-    fig.update_layout(barmode="group",yaxis=dict(title="Fulfillment (%)",range=[0,118],gridcolor="#F1F5F9"),
-        xaxis=dict(tickfont=dict(color="#64748B",size=11)),paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",height=300,
-        legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="right",x=1),margin=dict(l=10,r=10,t=10,b=10))
-    fig.add_hline(y=100,line_dash="dot",line_color="#AAB7B8")
-    return fig
-
-def draw_heatmap(sc, ranking):
-    """Green-Red heatmap — safe=green, danger=red"""
-    if not ranking: return go.Figure()
-    node_ids=list(sc.nodes.keys()); node_names=[sc.nodes[n].name for n in node_ids]
-    z=[]
-    for nid in node_ids:
-        outs=[r for r in ranking if r["source"]==nid]; ins=[r for r in ranking if r["target"]==nid]
-        max_out=max((r["avg_fulfillment_drop"] for r in outs),default=0)
-        max_in =max((r["avg_fulfillment_drop"] for r in ins),default=0)
-        nc_out=sum(1 for r in outs if r["severity"]=="critical")*25
-        nc_in =sum(1 for r in ins if r["severity"]=="critical")*25
-        z.append([max_out,max_in,nc_out,nc_in])
-    fig=go.Figure(go.Heatmap(
-        z=z, x=["Outbound Risk","Inbound Risk","Critical Out Links","Critical In Links"],
-        y=node_names,
-        colorscale=HEATMAP_COLORSCALE,
-        text=[[f"<b>{v:.0f}</b>" for v in row] for row in z],
-        texttemplate="%{text}",textfont={"size":12,"color":"#2C3E50"},
-        hoverongaps=False,showscale=True,zmin=0,zmax=100,
-        colorbar=dict(title=dict(text="Risk Level",font=dict(color="#0F172A",size=11)),
-                     tickfont=dict(color="#64748B",size=11),
-                     tickvals=[0,25,50,75,100],ticktext=["0 — Safe","25","50 — Med","75","100 — Critical"])))
-    fig.update_layout(
-        height=max(350,len(node_ids)*48),
-        paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",
-        margin=dict(l=10,r=10,t=50,b=10),
-        title=dict(text="<b>Node Risk Exposure Matrix</b>  (Green = Safe → Red = Critical)",
-                   font=dict(color="#0F172A",size=13),x=0.5),
-        xaxis=dict(side="top",tickfont=dict(size=11,color="#2C3E50")),
-        yaxis=dict(tickfont=dict(size=11,color="#2C3E50"),autorange="reversed"))
-    return fig
-
-def draw_criticality_chart(ranking):
-    if not ranking: return go.Figure()
-    labels=[r["label"] for r in ranking]; drops=[r["avg_fulfillment_drop"] for r in ranking]
-    colors=[SEV[r["severity"]] for r in ranking]
-    fig=go.Figure(go.Bar(x=drops,y=labels,orientation="h",marker_color=colors,
-        text=[f"  {d}%" for d in drops],textposition="outside",textfont=dict(size=11,color="#2C3E50")))
-    fig.update_layout(
-        xaxis=dict(title="<b>Avg. Fulfillment Drop (%)</b>",range=[0,max(drops or [10])*1.35],gridcolor="#F1F5F9"),
-        yaxis=dict(autorange="reversed",tickfont=dict(size=11,color="#2C3E50")),
-        paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",
-        height=max(320,len(ranking)*44),margin=dict(l=10,r=80,t=10,b=10))
-    return fig
-
-def draw_resilience_gauge(score):
-    col="#E74C3C" if score<40 else "#E67E22" if score<70 else "#27AE60"
-    fig=go.Figure(go.Indicator(mode="gauge+number",value=score,
-        number={"suffix":"%","font":{"size":36,"color":col}},
-        gauge={"axis":{"range":[0,100]},"bar":{"color":col},
-               "steps":[{"range":[0,40],"color":"#FADBD8"},{"range":[40,70],"color":"#FDEBD0"},{"range":[70,100],"color":"#D5F5E3"}],
-               "threshold":{"line":{"color":col,"width":3},"thickness":0.75,"value":score}}))
-    fig.update_layout(height=200,margin=dict(l=20,r=20,t=10,b=10),paper_bgcolor="#FFFFFF")
-    return fig
-
-def draw_forecast_chart(fc, node_id, sc_nodes):
-    if node_id not in fc.history or node_id not in fc.forecasts: return go.Figure()
-    hist=fc.history[node_id]; fore=fc.forecasts[node_id]
-    fig=go.Figure()
-    fig.add_trace(go.Scatter(x=hist["date"],y=hist["demand"],mode="lines",
-        name="Historical",line=dict(color="#2980B9",width=1.5),opacity=0.8))
-    fig.add_trace(go.Scatter(x=fore["date"],y=fore["forecast"],mode="lines",
-        name="Forecast",line=dict(color="#E67E22",width=2.5,dash="dash")))
-    fig.add_trace(go.Scatter(
-        x=list(fore["date"])+list(fore["date"][::-1]),
-        y=list(fore["upper"])+list(fore["lower"][::-1]),
-        fill="toself",fillcolor="rgba(230,126,34,0.12)",
-        line=dict(color="rgba(0,0,0,0)"),name="CI Band"))
-    node_name=sc_nodes[node_id].name if node_id in sc_nodes else node_id
-    fig.update_layout(
-        title=dict(text=f"<b>Demand Forecast — {node_name}</b>",font=dict(color="#0F172A",size=13),x=0.5),
-        xaxis=dict(gridcolor="#F1F5F9"),yaxis=dict(title="Units",gridcolor="#F1F5F9"),
-        paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",height=360,
-        legend=dict(font=dict(color="#0F172A"),bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10,r=10,t=40,b=10))
-    return fig
-
-def draw_scorecard_radar(name, scores):
-    cats=["Reliability","Lead Time","Quality","Cost Efficiency","Reliability"]
-    vals=[scores["reliability"],scores["lead_time"],scores["quality"],scores["cost_efficiency"],scores["reliability"]]
-    fig=go.Figure(go.Scatterpolar(r=vals,theta=cats,fill="toself",
-        line=dict(color="#1B4F72",width=2),fillcolor="rgba(27,79,114,0.15)"))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True,range=[0,100],gridcolor="#E5E8E8")),
-        showlegend=False,height=280,paper_bgcolor="#FFFFFF",
-        margin=dict(l=30,r=30,t=30,b=10),
-        title=dict(text=f"<b>{name}</b>",font=dict(size=12,color="#2C3E50"),x=0.5))
-    return fig
-
-def draw_geo_map(sc, scope="india"):
-    fig=go.Figure()
-    for e in sc.edges:
-        s=sc.nodes[e.source]; t=sc.nodes[e.target]
-        if s.x and s.y and t.x and t.y:
-            fig.add_trace(go.Scattergeo(lon=[s.x,t.x,None],lat=[s.y,t.y,None],
-                mode="lines",line=dict(width=1.5,color="#AAB7B8"),showlegend=False,hoverinfo="skip"))
-    for ntype,nlist,col,sym,sz in [
-        ("plant",[n for n in sc.nodes.values() if n.node_type=="plant"],"#0F6E56","square",14),
-        ("warehouse",[n for n in sc.nodes.values() if n.node_type=="warehouse"],"#185FA5","diamond",12),
-        ("demand",[n for n in sc.nodes.values() if n.node_type=="demand"],"#993C1D","circle",10)]:
-        if nlist:
-            fig.add_trace(go.Scattergeo(lon=[n.x for n in nlist],lat=[n.y for n in nlist],
-                mode="markers+text",name=ntype.capitalize()+"s",
-                text=[n.name for n in nlist],textposition="top center",textfont=dict(size=9,color="#2C3E50"),
-                hovertext=[f"<b>{n.name}</b><br>{ntype}<br>{n.location}" for n in nlist],hoverinfo="text",
-                marker=dict(size=sz,color=col,symbol=sym,line=dict(width=1.5,color="white"))))
-    sc2="asia" if scope=="india" else "world"
-    geo=dict(scope=sc2,showland=True,landcolor="#F2F3F4",showocean=True,oceancolor="#EBF5FB",
-             showcountries=True,countrycolor="#BDC3C7",showcoastlines=True,coastlinecolor="#85929E",bgcolor="#FDFEFE")
-    if scope=="india": geo.update(center=dict(lon=80,lat=22),projection_scale=4.5)
-    fig.update_layout(geo=geo,height=500,paper_bgcolor="#FFFFFF",
-        margin=dict(l=0,r=0,t=0,b=0),
-        legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="right",x=1,font=dict(size=11,color="#2C3E50")))
-    return fig
-
-
-# ═══════════════════════════════════════════════════════════════
-# FREE AI (Groq — free tier with llama3)
-# ═══════════════════════════════════════════════════════════════
-FREE_AI_MODELS = {
-    "Groq — Llama 3.1 8B (Fast, Free)": {
-        "provider":"groq","model":"llama-3.1-8b-instant","url":"https://api.groq.com/openai/v1/chat/completions"
-    },
-    "Groq — Llama 3.3 70B (Smart, Free)": {
-        "provider":"groq","model":"llama-3.3-70b-versatile","url":"https://api.groq.com/openai/v1/chat/completions"
-    },
-    "Groq — Gemma 2 9B (Free)": {
-        "provider":"groq","model":"gemma2-9b-it","url":"https://api.groq.com/openai/v1/chat/completions"
-    },
+/* ── Progress ───────────────────────────────────── */
+.stProgress>div>div{background:#0F172A !important;border-radius:4px !important;}
+.stSlider [data-baseweb="slider"] div{background:#0F172A !important;}
+
+/* ── Data status banner ─────────────────────────── */
+.data-banner-user{
+  background:linear-gradient(90deg,#F0FDF4,#DCFCE7);
+  border:1px solid #BBF7D0; border-radius:8px;
+  padding:9px 18px; margin-bottom:16px; font-size:12px;
+  color:#14532D; font-weight:500;
+  display:flex; align-items:center; justify-content:space-between;
 }
-
-GROQ_SIGNUP = "https://console.groq.com"  # Free signup, no credit card needed
-
-SC_SYSTEM_PROMPT = """You are an expert AI assistant for SR's Supply Chain & Operations Helper platform.
-You help with supply chain management, inventory optimization, demand forecasting, risk analysis, and logistics.
-
-When users describe actions (e.g. "I added 100 units of Rice"), extract:
-- Intent (update_stock, find_path, check_status, etc.)
-- Entities (node name, item, quantity)
-- Then include an action block if appropriate:
-
-ACTION_JSON_START
-{"action":"update_stock","node":"Plant Mumbai","item":"Rice","quantity":100,"operation":"add"}
-ACTION_JSON_END
-
-Available actions: update_stock, find_path, run_disruption, get_status, check_atp, run_forecast
-Always ask for confirmation before modifying data. Be concise and professional."""
-
-def call_free_ai(messages, api_key, model_config):
-    if not api_key or not api_key.strip():
-        return None, "no_key"
-    try:
-        r=requests.post(
-            model_config["url"],
-            headers={"Authorization":f"Bearer {api_key.strip()}","Content-Type":"application/json"},
-            json={"model":model_config["model"],"messages":[{"role":"system","content":SC_SYSTEM_PROMPT}]+messages,"max_tokens":1200,"temperature":0.7},
-            timeout=30)
-        if r.status_code==200:
-            data=r.json()
-            if "choices" in data and data["choices"]:
-                return data["choices"][0]["message"]["content"], "ok"
-            return None,"empty"
-        elif r.status_code==401: return None,"invalid_key"
-        elif r.status_code==429: return None,"rate_limit"
-        else: return None,f"error_{r.status_code}"
-    except requests.exceptions.Timeout: return None,"timeout"
-    except Exception as ex: return None,f"exception_{str(ex)}"
-
-def parse_action(text):
-    match=re.search(r"ACTION_JSON_START\s*(.*?)\s*ACTION_JSON_END",text,re.DOTALL)
-    if match:
-        try: return json.loads(match.group(1).strip())
-        except: return None
-    return None
-
-def clean_response(text):
-    return re.sub(r"ACTION_JSON_START.*?ACTION_JSON_END","",text,flags=re.DOTALL).strip()
-
-def execute_action(action, sc, inv):
-    a=action.get("action","")
-    try:
-        if a=="update_stock":
-            nn=action.get("node",""); iname=action.get("item","")
-            qty=float(action.get("quantity",0)); op=action.get("operation","add")
-            nid=next((n.id for n in sc.nodes.values() if n.name.lower()==nn.lower()),None)
-            iid=next((id for id,iv in inv.items.items() if iv["name"].lower()==iname.lower()),None)
-            if not nid: return False,f"Node '{nn}' not found"
-            if not iid: return False,f"Item '{iname}' not found"
-            delta=qty if op=="add" else -qty if op=="remove" else None
-            if delta is not None:
-                inv.update_stock(nid,iid,delta)
-                return True,f"{'Added' if op=='add' else 'Removed'} {qty:.0f} units of {iname} {'to' if op=='add' else 'from'} {nn}"
-        elif a=="find_path":
-            frm=action.get("from",""); to=action.get("to","")
-            fid=next((n.id for n in sc.nodes.values() if n.name.lower()==frm.lower()),None)
-            tid=next((n.id for n in sc.nodes.values() if n.name.lower()==to.lower()),None)
-            if not fid or not tid: return False,"One or both nodes not found"
-            res=sc.all_shortest_paths(fid,tid,k=3)
-            if res:
-                st.session_state.highlight_path=res[0]["path"]
-                pnames=" → ".join(sc.nodes[n].name for n in res[0]["path"])
-                return True,f"Path highlighted: {pnames}"
-            return False,"No path found"
-        elif a=="get_status":
-            plants=[n for n in sc.nodes.values() if n.node_type=="plant"]
-            al=inv.get_alerts(sc.nodes)
-            return True,(f"Network: {len(plants)} plants, {len(sc.edges)} connections. "
-                        f"Alerts: {len([x for x in al if x['level']=='critical'])} critical.")
-    except Exception as ex: return False,f"Action failed: {str(ex)}"
-    return False,"Unknown action"
-
-
-# ═══════════════════════════════════════════════════════════════
-# CSS — Clean Light Professional Theme
-# ═══════════════════════════════════════════════════════════════
-APP_CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-html,body,[class*="css"]{font-family:'Inter',sans-serif;}
-
-.hdr{background:linear-gradient(135deg,#1B2631 0%,#1B4F72 100%);
-  padding:16px 24px;border-radius:10px;display:flex;align-items:center;gap:16px;
-  margin-bottom:20px;box-shadow:0 2px 12px rgba(0,0,0,0.12);}
-.hdr h1{color:#fff;font-size:19px;font-weight:700;margin:0;}
-.hdr p{color:#AEB6BF;font-size:11px;margin:2px 0 0;text-transform:uppercase;letter-spacing:0.8px;}
-.hdr span{color:#F39C12;font-weight:600;font-size:12px;}
-
-.kpi{background:#fff;border:1px solid #E5E8E8;border-radius:8px;padding:14px 18px;
-  border-left:4px solid #1B4F72;transition:box-shadow 0.2s;}
-.kpi:hover{box-shadow:0 2px 8px rgba(0,0,0,0.08);}
-.kpi-lbl{font-size:10px;color:#7F8C8D;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:3px;}
-.kpi-val{font-size:24px;font-weight:700;color:#1B2631;line-height:1;}
-.kpi-sub{font-size:10px;color:#5D6D7E;margin-top:3px;}
-
-.sh{font-size:11px;font-weight:700;color:#2C3E50;text-transform:uppercase;
-  letter-spacing:1.2px;border-bottom:2px solid #E5E8E8;padding-bottom:6px;margin-bottom:14px;}
-
-.section-card{background:#FFFFFF;border:1px solid #E5E8E8;border-radius:10px;
-  padding:16px 20px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,0.05);}
-
-.al-r{background:#FDEDEC;border-left:4px solid #E74C3C;padding:10px 14px;border-radius:0 6px 6px 0;margin:6px 0;font-size:13px;color:#2C3E50;}
-.al-a{background:#FEF9E7;border-left:4px solid #E67E22;padding:10px 14px;border-radius:0 6px 6px 0;margin:6px 0;font-size:13px;color:#2C3E50;}
-.al-g{background:#EAFAF1;border-left:4px solid #27AE60;padding:10px 14px;border-radius:0 6px 6px 0;margin:6px 0;font-size:13px;color:#2C3E50;}
-.al-b{background:#EBF5FB;border-left:4px solid #2980B9;padding:10px 14px;border-radius:0 6px 6px 0;margin:6px 0;font-size:13px;color:#2C3E50;}
-
-.transport-card{background:#F8F9FA;border:1px solid #E5E8E8;border-radius:8px;padding:14px 18px;margin:8px 0;}
-.transport-mode{font-size:18px;font-weight:700;color:#1B4F72;}
-.transport-detail{font-size:12px;color:#5D6D7E;margin-top:4px;}
-
-.card{background:#F8F9FA;border:1px solid #E5E8E8;border-radius:6px;padding:12px 16px;margin:5px 0;font-size:13px;color:#2C3E50;}
-
-.b-r{background:#FADBD8;color:#C0392B;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;}
-.b-a{background:#FDEBD0;color:#E67E22;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;}
-.b-g{background:#D5F5E3;color:#1A8A4A;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;}
-.b-b{background:#D6EAF8;color:#1B4F72;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;}
-
-.stButton>button{background:#1B4F72!important;color:#fff!important;border:none!important;
-  border-radius:6px!important;font-weight:600!important;font-size:13px!important;}
-.stButton>button:hover{background:#154360!important;}
-
-div[data-testid="stExpander"]{border:1px solid #E5E8E8!important;border-radius:8px!important;}
-
-.stTabs [data-baseweb="tab"]{font-size:13px;font-weight:500;color:#5D6D7E;}
-.stTabs [aria-selected="true"]{color:#1B4F72!important;font-weight:700!important;}
-
-.user-bubble{background:#1B4F72;color:#fff;padding:10px 14px;border-radius:14px 14px 2px 14px;
-  max-width:75%;font-size:13px;line-height:1.5;margin:6px 0;}
-.ai-bubble{background:#F8F9FA;border:1px solid #E5E8E8;color:#2C3E50;padding:10px 14px;
-  border-radius:14px 14px 14px 2px;max-width:80%;font-size:13px;line-height:1.6;margin:6px 0;}
-.chat-wrap{display:flex;margin:6px 0;}
-.chat-right{justify-content:flex-end;}.chat-left{justify-content:flex-start;}
-
-.sb-sec{font-size:10px;font-weight:700;color:#7F8C8D;text-transform:uppercase;letter-spacing:1px;margin:12px 0 6px;}
-b,.bold-label{font-weight:700!important;}
+.data-banner-demo{
+  background:linear-gradient(90deg,#FFFBEB,#FEF3C7);
+  border:1px solid #FDE68A; border-radius:8px;
+  padding:9px 18px; margin-bottom:16px; font-size:12px;
+  color:#92400E; font-weight:500;
+}
 </style>
 """
-
 # ═══════════════════════════════════════════════════════════════
 # VOICE COMPONENT
 # ═══════════════════════════════════════════════════════════════
@@ -2929,7 +1754,7 @@ with st.sidebar:
         for ntype,label in [("plant"," Plants"),("warehouse"," Warehouses"),("demand"," Demand Points")]:
             nlist=[n for n in sc.nodes.values() if n.node_type==ntype]
             if nlist:
-                with st.expander("{label} ({len(nlist)})"):
+                with st.expander(f"{label} ({len(nlist)})"):
                     for n in nlist:
                         c1,c2=st.columns([4,1])
                         c1.markdown(f"<b>{n.name}</b> <span style='color:#7F8C8D;font-size:11px'>{int(n.capacity)}</span>",unsafe_allow_html=True)
@@ -3131,7 +1956,7 @@ with st.sidebar:
             except Exception as ex: st.error(f"Import failed: {ex}")
 
         st.markdown('<div class="sb-sec">Export</div>', unsafe_allow_html=True)
-        ndf=pd.DataFrame([vars(n) for n in sc.nodes.values()]); edf=pd.DataFrame([vars(e) for e in sc.edges])
+        ndf=pd.DataFrame([vars(n) if hasattr(n,"__dataclass_fields__") else n for n in sc.nodes.values()]); edf=pd.DataFrame([{"source":e.source,"target":e.target,"capacity":e.capacity,"cost":e.cost,"active":e.active} for e in sc.edges])
         c1,c2=st.columns(2)
         if not ndf.empty: c1.download_button("Nodes",ndf.to_csv(index=False),"nodes.csv",use_container_width=True)
         if not edf.empty: c2.download_button("Edges",edf.to_csv(index=False),"edges.csv",use_container_width=True)
@@ -3444,7 +2269,7 @@ with t3:
                     if imp["drop_pct"]>0:
                         sv2=SEV[imp["severity"]]
                         st.markdown(f"""<div style="display:flex;justify-content:space-between;align-items:center;
-                          padding:7px 12px;background:#F8F9FA;border-radius:5px;margin:3px 0;border-left:3px solid {sv2}">
+                          padding:7px 12px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;margin:3px 0;border-left:3px solid {sv2}">
                           <b style="font-size:13px">{imp['demand_name']}</b>
                           <span style="font-size:12px;color:#5D6D7E">{imp['before_pct']}%→{imp['after_pct']}% | <b>−{imp['drop_pct']}%</b> | −{imp['lost_units']} units</span>
                           <span style="color:{sv2};font-size:11px;font-weight:700">{imp['severity'].upper()}</span></div>""",unsafe_allow_html=True)
