@@ -99,10 +99,10 @@ def get_state(location_str):
 def recommend_transport(src_node, tgt_node, load_units, urgent=False):
     """
     Smart transport mode recommendation based on:
-    - Same city/state → road
-    - Load size → truck / rail / air
-    - Urgent → air
-    - Distance → affects mode
+    - Same city/state -> road
+    - Load size -> truck / rail / air
+    - Urgent -> air
+    - Distance -> affects mode
     """
     src_loc = src_node.location; tgt_loc = tgt_node.location
     src_state = get_state(src_loc); tgt_state = get_state(tgt_loc)
@@ -190,10 +190,10 @@ def get_state(location_str):
 def recommend_transport(src_node, tgt_node, load_units, urgent=False):
     """
     Smart transport mode recommendation based on:
-    - Same city/state → road
-    - Load size → truck / rail / air
-    - Urgent → air
-    - Distance → affects mode
+    - Same city/state -> road
+    - Load size -> truck / rail / air
+    - Urgent -> air
+    - Distance -> affects mode
     """
     src_loc = src_node.location; tgt_loc = tgt_node.location
     src_state = get_state(src_loc); tgt_state = get_state(tgt_loc)
@@ -373,7 +373,7 @@ class SupplyChainGraph:
                 alt_paths[d_id] = paths[:3]
                 self.toggle_edge(src, tgt, True)
         avg_drop = sum(v["drop_pct"] for v in impact.values())/len(impact) if impact else 0
-        return {"removed_edge": f"{self.nodes[src].name} → {self.nodes[tgt].name}",
+        return {"removed_edge": f"{self.nodes[src].name} -> {self.nodes[tgt].name}",
                 "removed_src": src, "removed_tgt": tgt,
                 "resilience_score": round(max(0, 100-avg_drop), 1),
                 "impact": impact, "alt_paths": alt_paths}
@@ -1045,7 +1045,7 @@ NC={"plant":"#15803D","warehouse":"#1D4ED8","demand":"#B91C1C"}
 NS={"plant":"square","warehouse":"diamond","demand":"circle"}
 SEV={"critical":"#E74C3C","high":"#E67E22","medium":"#3498DB","low":"#27AE60","none":"#95A5A6"}
 
-# Green → Yellow → Red heatmap (proper, visible)
+# Green -> Yellow -> Red heatmap (proper, visible)
 HEATMAP_COLORSCALE=[
     [0.0,  "#16A34A"],
     [0.25, "#86EFAC"],
@@ -1077,7 +1077,7 @@ def draw_network(sc, highlight_path=None, disrupted_edge=None, show_cap=True, in
         col="#E74C3C" if is_dis else "#E67E22" if is_hi else "#2980B9" if is_it else "#BDC3C7"
         w=3 if is_hi else 2.5 if is_dis else 2.5 if is_it else 1.5
         dash="dot" if(not e.active or is_dis) else "solid"
-        ht=f"<b>{sc.nodes[e.source].name} → {sc.nodes[e.target].name}</b><br>Capacity: {e.capacity} | Cost: {e.cost}"
+        ht=f"<b>{sc.nodes[e.source].name} -> {sc.nodes[e.target].name}</b><br>Capacity: {e.capacity} | Cost: {e.cost}"
         traces.append(go.Scatter(x=[x0,x1,None],y=[y0,y1,None],mode="lines",
             line=dict(color=col,width=w,dash=dash),hovertext=ht,hoverinfo="text",showlegend=False))
         if show_cap and not large_graph:
@@ -1172,7 +1172,7 @@ def draw_heatmap(sc, ranking):
         height=max(350,len(node_ids)*48),
         paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",
         margin=dict(l=10,r=10,t=50,b=10),
-        title=dict(text="<b>Node Risk Exposure Matrix</b>  (Green = Safe → Red = Critical)",
+        title=dict(text="<b>Node Risk Exposure Matrix</b>  (Green = Safe -> Red = Critical)",
                    font=dict(color="#0F172A",size=13),x=0.5),
         xaxis=dict(side="top",tickfont=dict(size=11,color="#2C3E50")),
         yaxis=dict(tickfont=dict(size=11,color="#2C3E50"),autorange="reversed"))
@@ -1345,7 +1345,7 @@ def execute_action(action, sc, inv):
             res=sc.all_shortest_paths(fid,tid,k=3)
             if res:
                 st.session_state.highlight_path=res[0]["path"]
-                pnames=" → ".join(sc.nodes[n].name for n in res[0]["path"])
+                pnames=" -> ".join(sc.nodes[n].name for n in res[0]["path"])
                 return True,f"Path highlighted: {pnames}"
             return False,"No path found"
         elif a=="get_status":
@@ -1360,245 +1360,373 @@ def execute_action(action, sc, inv):
 # ═══════════════════════════════════════════════════════════════
 # CSS — Clean Light Professional Theme
 # ═══════════════════════════════════════════════════════════════
+# SCENARIO PLANNING ENGINE
+# ═══════════════════════════════════════════════════════════════
+class ScenarioManager:
+    """Save/compare named supply chain scenarios"""
+    def __init__(self):
+        self.scenarios = {}   # name -> {sc_dict, inv_dict, label, ts}
+
+    def save(self, name, sc, inv, label=""):
+        import json as _j
+        self.scenarios[name] = {
+            "nodes": [vars(n) if hasattr(n,"__dataclass_fields__") else n for n in sc.nodes.values()],
+            "edges": [{"source":e.source,"target":e.target,"capacity":e.capacity,"cost":e.cost,"active":e.active} for e in sc.edges],
+            "n_nodes": len(sc.nodes), "n_edges": len(sc.edges),
+            "total_cap": sum(n.capacity for n in sc.nodes.values() if n.node_type=="plant"),
+            "total_dem": sum(n.capacity for n in sc.nodes.values() if n.node_type=="demand"),
+            "label": label, "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+
+    def list_scenarios(self):
+        return list(self.scenarios.keys())
+
+    def compare_df(self):
+        rows = []
+        for name, d in self.scenarios.items():
+            cov = round(d["total_cap"]/max(d["total_dem"],1)*100,1)
+            rows.append({"Scenario": name, "Label": d["label"], "Saved": d["ts"],
+                         "Nodes": d["n_nodes"], "Edges": d["n_edges"],
+                         "Plant Capacity": d["total_cap"], "Total Demand": d["total_dem"],
+                         "Coverage %": cov})
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+# ═══════════════════════════════════════════════════════════════
 APP_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
 
-/* ── Global ─────────────────────────────────────── */
+/* ── GLOBAL ─────────────────────────────────────────── */
 html,body,[class*="css"]{
   font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
-  font-size:14px; color:#1E293B;
+  font-size:14px; color:#0F172A;
 }
 .main .block-container{
-  background:#F8FAFC; padding-top:1rem; padding-bottom:2rem;
-  max-width:1400px;
+  background:#F8FAFC; padding-top:0.8rem; max-width:1440px;
 }
 
-/* ── App Header ─────────────────────────────────── */
+/* ── ANIMATED HEADER ──────────────────────────────────── */
 .app-header{
-  background:linear-gradient(120deg,#0F172A 0%,#1E3A5F 55%,#0E4D6B 100%);
-  border-radius:12px; padding:18px 28px;
-  display:flex; align-items:center; gap:18px;
-  margin-bottom:20px;
-  border:1px solid rgba(255,255,255,0.07);
-  box-shadow:0 4px 24px rgba(0,0,0,0.22),0 1px 0 rgba(255,255,255,0.04) inset;
+  background:linear-gradient(135deg,#0F172A 0%,#1E3A5F 40%,#0C4A6E 70%,#0F172A 100%);
+  background-size:300% 300%;
+  animation:gradientShift 8s ease infinite;
+  border-radius:14px; padding:20px 30px;
+  display:flex; align-items:center; gap:20px;
+  margin-bottom:24px;
+  border:1px solid rgba(255,255,255,0.08);
+  box-shadow:0 8px 40px rgba(0,0,0,0.3), 0 1px 0 rgba(255,255,255,0.05) inset;
+  position:relative; overflow:hidden;
+}
+.app-header::before{
+  content:'';
+  position:absolute; top:-50%; left:-50%; width:200%; height:200%;
+  background:radial-gradient(ellipse at center, rgba(56,189,248,0.06) 0%, transparent 65%);
+  animation:pulse 4s ease-in-out infinite;
+}
+@keyframes gradientShift{
+  0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%}
+}
+@keyframes pulse{
+  0%,100%{transform:scale(1);opacity:0.5} 50%{transform:scale(1.05);opacity:1}
 }
 .app-header h1{
-  color:#F8FAFC; font-size:18px; font-weight:700;
-  margin:0; letter-spacing:-0.3px;
+  color:#F8FAFC; font-size:18px; font-weight:800;
+  margin:0; letter-spacing:-0.4px; position:relative; z-index:1;
 }
-.app-header .sub{
-  color:rgba(255,255,255,0.42); font-size:10px;
-  margin:3px 0 0; text-transform:uppercase; letter-spacing:2px; font-weight:500;
+.app-header .tagline{
+  color:rgba(148,163,184,0.8); font-size:10px;
+  margin:3px 0 0; text-transform:uppercase; letter-spacing:2.5px; font-weight:600;
+  position:relative; z-index:1;
 }
 .app-header .badge{
-  margin-left:auto; background:rgba(255,255,255,0.07);
-  border:1px solid rgba(255,255,255,0.12);
-  color:rgba(255,255,255,0.65); font-size:10px; font-weight:700;
-  padding:4px 12px; border-radius:20px;
-  letter-spacing:1.5px; text-transform:uppercase;
+  margin-left:auto; position:relative; z-index:1;
+  background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.3);
+  color:#7DD3FC; font-size:9px; font-weight:800;
+  padding:4px 14px; border-radius:20px; letter-spacing:2px; text-transform:uppercase;
+  white-space:nowrap;
 }
 
-/* ── Section Heading ────────────────────────────── */
+/* ── SECTION HEADING ──────────────────────────────────── */
 .sh{
   font-size:9.5px; font-weight:800; color:#64748B;
   text-transform:uppercase; letter-spacing:2px;
-  padding-bottom:8px; margin-bottom:16px; margin-top:4px;
+  padding-bottom:9px; margin-bottom:16px; margin-top:4px;
   border-bottom:1px solid #E2E8F0;
 }
 
-/* ── KPI Card ───────────────────────────────────── */
+/* ── ANIMATED KPI CARDS ───────────────────────────────── */
 .kpi{
   background:#FFFFFF; border:1px solid #E2E8F0;
-  border-radius:10px; padding:16px 18px;
+  border-radius:12px; padding:18px 20px;
   border-top:3px solid #1E40AF;
-  box-shadow:0 1px 4px rgba(0,0,0,0.05);
-  transition:transform .15s ease,box-shadow .15s ease;
+  box-shadow:0 1px 3px rgba(0,0,0,0.06),0 0 0 0 rgba(30,64,175,0);
+  transition:all 0.25s cubic-bezier(0.4,0,0.2,1);
+  position:relative; overflow:hidden;
+}
+.kpi::after{
+  content:''; position:absolute; bottom:0; left:0; right:0; height:2px;
+  background:linear-gradient(90deg,transparent,rgba(30,64,175,0.4),transparent);
+  transform:translateX(-100%); transition:transform 0.4s;
 }
 .kpi:hover{
-  transform:translateY(-2px);
-  box-shadow:0 6px 20px rgba(0,0,0,0.09);
+  transform:translateY(-3px);
+  box-shadow:0 12px 28px rgba(0,0,0,0.1),0 0 0 1px rgba(30,64,175,0.1);
+  border-top-color:#3B82F6;
 }
+.kpi:hover::after{transform:translateX(100%);}
 .kpi-lbl{
   font-size:9.5px; color:#94A3B8; font-weight:700;
-  text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;
+  text-transform:uppercase; letter-spacing:1px; margin-bottom:7px;
 }
 .kpi-val{
-  font-size:26px; font-weight:800; color:#0F172A;
-  line-height:1; letter-spacing:-1px;
+  font-size:28px; font-weight:800; color:#0F172A;
+  line-height:1; letter-spacing:-1.5px;
 }
-.kpi-sub{
-  font-size:10.5px; color:#94A3B8; margin-top:5px;
+.kpi-sub{font-size:10.5px; color:#94A3B8; margin-top:6px;}
+
+/* ── METRIC CARDS (control tower) ────────────────────── */
+.metric-card{
+  background:linear-gradient(135deg,#FFFFFF 0%,#F8FAFC 100%);
+  border:1px solid #E2E8F0; border-radius:14px; padding:20px;
+  box-shadow:0 2px 8px rgba(0,0,0,0.06);
+  transition:all 0.2s ease;
+}
+.metric-card:hover{
+  box-shadow:0 8px 24px rgba(0,0,0,0.1);
+  transform:translateY(-2px);
 }
 
-/* ── Cards ──────────────────────────────────────── */
+/* ── ALERT CARDS (glassy) ─────────────────────────────── */
+.al-r{background:linear-gradient(135deg,#FEF2F2,#FFF5F5);border-left:3px solid #DC2626;
+  color:#1E293B;padding:11px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;
+  box-shadow:0 1px 3px rgba(220,38,38,0.1);}
+.al-a{background:linear-gradient(135deg,#FFFBEB,#FFFEF0);border-left:3px solid #D97706;
+  color:#1E293B;padding:11px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;
+  box-shadow:0 1px 3px rgba(217,119,6,0.1);}
+.al-g{background:linear-gradient(135deg,#F0FDF4,#F7FEF7);border-left:3px solid #16A34A;
+  color:#1E293B;padding:11px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;
+  box-shadow:0 1px 3px rgba(22,163,74,0.1);}
+.al-b{background:linear-gradient(135deg,#EFF6FF,#F5F9FF);border-left:3px solid #2563EB;
+  color:#1E293B;padding:11px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;
+  box-shadow:0 1px 3px rgba(37,99,235,0.1);}
+
+/* ── BADGES ───────────────────────────────────────────── */
+.b-r{background:#FEE2E2;color:#991B1B;padding:2px 10px;border-radius:5px;font-size:11px;font-weight:700;letter-spacing:0.3px;}
+.b-a{background:#FEF3C7;color:#92400E;padding:2px 10px;border-radius:5px;font-size:11px;font-weight:700;letter-spacing:0.3px;}
+.b-g{background:#DCFCE7;color:#14532D;padding:2px 10px;border-radius:5px;font-size:11px;font-weight:700;letter-spacing:0.3px;}
+.b-b{background:#DBEAFE;color:#1E40AF;padding:2px 10px;border-radius:5px;font-size:11px;font-weight:700;letter-spacing:0.3px;}
+.b-p{background:#F3E8FF;color:#6B21A8;padding:2px 10px;border-radius:5px;font-size:11px;font-weight:700;letter-spacing:0.3px;}
+
+/* ── SMART TABLE ─────────────────────────────────────── */
+.smart-table-wrap{
+  background:#FFFFFF; border:1px solid #E2E8F0;
+  border-radius:12px; overflow:hidden;
+  box-shadow:0 2px 8px rgba(0,0,0,0.06);
+}
+.table-toolbar{
+  background:linear-gradient(90deg,#F8FAFC,#F1F5F9);
+  padding:12px 16px; border-bottom:1px solid #E2E8F0;
+  display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+}
+
+/* ── CARDS ────────────────────────────────────────────── */
 .card{
   background:#FFFFFF; border:1px solid #E2E8F0;
-  border-radius:8px; padding:12px 16px; margin:5px 0;
+  border-radius:10px; padding:14px 18px; margin:5px 0;
   font-size:13px; color:#1E293B;
   box-shadow:0 1px 3px rgba(0,0,0,0.04);
+  transition:box-shadow 0.2s;
 }
+.card:hover{box-shadow:0 4px 12px rgba(0,0,0,0.08);}
 .section-card{
   background:#FFFFFF; border:1px solid #E2E8F0;
-  border-radius:12px; padding:20px 24px; margin-bottom:16px;
-  box-shadow:0 1px 4px rgba(0,0,0,0.05);
+  border-radius:14px; padding:22px 26px; margin-bottom:18px;
+  box-shadow:0 2px 8px rgba(0,0,0,0.05);
 }
 
-/* ── Status Alerts ──────────────────────────────── */
-.al-r{background:#FEF2F2;border-left:3px solid #DC2626;color:#1E293B;
-  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;line-height:1.5;}
-.al-a{background:#FFFBEB;border-left:3px solid #D97706;color:#1E293B;
-  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;line-height:1.5;}
-.al-g{background:#F0FDF4;border-left:3px solid #16A34A;color:#1E293B;
-  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;line-height:1.5;}
-.al-b{background:#EFF6FF;border-left:3px solid #2563EB;color:#1E293B;
-  padding:10px 16px;border-radius:0 8px 8px 0;margin:6px 0;font-size:13px;line-height:1.5;}
-
-/* ── Badges ─────────────────────────────────────── */
-.b-r{background:#FEE2E2;color:#991B1B;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;}
-.b-a{background:#FEF3C7;color:#92400E;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;}
-.b-g{background:#DCFCE7;color:#14532D;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;}
-.b-b{background:#DBEAFE;color:#1E40AF;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;}
-
-/* ── Transport Card ─────────────────────────────── */
+/* ── TRANSPORT CARD ─────────────────────────────────── */
 .transport-card{
-  background:#F8FAFC; border:1px solid #E2E8F0;
-  border-radius:10px; padding:14px 18px; margin:8px 0;
-  box-shadow:0 1px 3px rgba(0,0,0,0.04);
+  background:linear-gradient(135deg,#F8FAFC,#FFFFFF);
+  border:1px solid #E2E8F0; border-radius:12px;
+  padding:16px 20px; margin:8px 0;
+  box-shadow:0 2px 6px rgba(0,0,0,0.05);
+  transition:all 0.2s; position:relative;
+}
+.transport-card:hover{
+  border-color:#CBD5E1;
+  box-shadow:0 6px 16px rgba(0,0,0,0.08);
+  transform:translateX(2px);
 }
 .transport-mode{font-size:14px;font-weight:800;color:#0F172A;letter-spacing:-0.2px;}
 .transport-route{font-size:13px;font-weight:600;color:#1E293B;}
 .transport-detail{font-size:12px;color:#64748B;margin-top:6px;line-height:1.7;}
 .transport-reason{font-size:11px;color:#94A3B8;margin-top:4px;font-style:italic;}
 
-/* ── Chat ───────────────────────────────────────── */
+/* ── SCENARIO CARD ──────────────────────────────────── */
+.scenario-card{
+  background:linear-gradient(135deg,#0F172A,#1E3A5F);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:12px; padding:18px; color:#F8FAFC;
+  box-shadow:0 4px 16px rgba(0,0,0,0.2);
+  transition:all 0.2s;
+}
+.scenario-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,0.3);}
+.scenario-name{font-size:15px;font-weight:700;color:#F8FAFC;margin-bottom:4px;}
+.scenario-meta{font-size:11px;color:rgba(148,163,184,0.8);}
+
+/* ── CHAT BUBBLES ────────────────────────────────────── */
 .user-bubble{
-  background:#0F172A; color:#F8FAFC;
-  padding:10px 16px; border-radius:16px 16px 3px 16px;
+  background:linear-gradient(135deg,#0F172A,#1E293B);
+  color:#F8FAFC; padding:11px 16px;
+  border-radius:18px 18px 3px 18px;
   max-width:74%; font-size:13px; line-height:1.5; margin:5px 0;
-  box-shadow:0 2px 8px rgba(15,23,42,0.2);
+  box-shadow:0 3px 10px rgba(15,23,42,0.25);
 }
 .ai-bubble{
   background:#FFFFFF; border:1px solid #E2E8F0; color:#1E293B;
-  padding:10px 16px; border-radius:16px 16px 16px 3px;
+  padding:11px 16px; border-radius:18px 18px 18px 3px;
   max-width:80%; font-size:13px; line-height:1.6; margin:5px 0;
+  box-shadow:0 2px 8px rgba(0,0,0,0.05);
 }
 .chat-wrap{display:flex;margin:3px 0;}
-.chat-right{justify-content:flex-end;}
-.chat-left{justify-content:flex-start;}
+.chat-right{justify-content:flex-end;} .chat-left{justify-content:flex-start;}
 
-/* ── Buttons ────────────────────────────────────── */
+/* ── CONTROL TOWER PULSE ────────────────────────────── */
+.pulse-dot{
+  width:8px; height:8px; border-radius:50%;
+  display:inline-block; margin-right:6px;
+  animation:pulseDot 2s ease-in-out infinite;
+}
+.pulse-green{background:#16A34A;box-shadow:0 0 0 0 rgba(22,163,74,0.4);}
+.pulse-red{background:#DC2626;box-shadow:0 0 0 0 rgba(220,38,38,0.4);}
+.pulse-amber{background:#D97706;box-shadow:0 0 0 0 rgba(217,119,6,0.4);}
+@keyframes pulseDot{
+  0%{box-shadow:0 0 0 0 currentColor,0.4} 70%{box-shadow:0 0 0 8px rgba(0,0,0,0)}
+  100%{box-shadow:0 0 0 0 rgba(0,0,0,0)}
+}
+
+/* ── PREMIUM BUTTONS ─────────────────────────────────── */
 .stButton>button{
-  background:#0F172A !important; color:#FFFFFF !important;
-  border:none !important; border-radius:7px !important;
-  font-weight:600 !important; font-size:13px !important;
-  padding:0.45rem 1.2rem !important; letter-spacing:0.1px !important;
-  box-shadow:0 1px 3px rgba(0,0,0,0.15) !important;
-  transition:background .15s,box-shadow .15s,transform .1s !important;
+  background:linear-gradient(135deg,#0F172A,#1E293B) !important;
+  color:#FFFFFF !important; border:none !important;
+  border-radius:8px !important; font-weight:700 !important;
+  font-size:13px !important; letter-spacing:0.2px !important;
+  padding:0.45rem 1.2rem !important;
+  box-shadow:0 1px 3px rgba(0,0,0,0.2),0 1px 2px rgba(0,0,0,0.1) !important;
+  transition:all 0.2s cubic-bezier(0.4,0,0.2,1) !important;
 }
 .stButton>button:hover{
-  background:#1E293B !important;
-  box-shadow:0 4px 14px rgba(0,0,0,0.2) !important;
+  background:linear-gradient(135deg,#1E293B,#334155) !important;
+  box-shadow:0 4px 14px rgba(0,0,0,0.25),0 2px 6px rgba(0,0,0,0.1) !important;
+  transform:translateY(-1px) !important;
 }
-.stButton>button:active{transform:scale(0.98) !important;}
+.stButton>button:active{transform:translateY(0) scale(0.98) !important;}
 .stDownloadButton>button{
-  background:#0F172A !important; color:#FFFFFF !important;
-  border:none !important; border-radius:7px !important;
-  font-weight:600 !important;
+  background:linear-gradient(135deg,#0F172A,#1E293B) !important;
+  color:#FFFFFF !important; border:none !important;
+  border-radius:8px !important; font-weight:700 !important;
 }
 
-/* ── Inputs ─────────────────────────────────────── */
+/* ── INPUTS ──────────────────────────────────────────── */
 .stTextInput>div>div>input,
 .stNumberInput>div>div>input,
 .stTextArea>div>textarea{
-  border:1px solid #D1D5DB !important; border-radius:7px !important;
+  border:1.5px solid #E2E8F0 !important; border-radius:8px !important;
   font-size:13px !important; background:#FFFFFF !important;
-  color:#0F172A !important;
+  color:#0F172A !important; transition:border-color 0.15s,box-shadow 0.15s !important;
 }
 .stTextInput>div>div>input:focus,
 .stNumberInput>div>div>input:focus{
   border-color:#1E40AF !important;
-  box-shadow:0 0 0 3px rgba(30,64,175,0.1) !important;
+  box-shadow:0 0 0 3px rgba(30,64,175,0.08) !important;
+  outline:none !important;
 }
 .stSelectbox>div>div{
-  border:1px solid #D1D5DB !important; border-radius:7px !important;
+  border:1.5px solid #E2E8F0 !important; border-radius:8px !important;
   background:#FFFFFF !important; font-size:13px !important;
 }
 
-/* ── Tabs ───────────────────────────────────────── */
+/* ── TABS ────────────────────────────────────────────── */
 .stTabs [data-baseweb="tab-list"]{
   background:transparent !important;
   border-bottom:2px solid #E2E8F0 !important; gap:0 !important;
 }
 .stTabs [data-baseweb="tab"]{
-  font-size:11px !important; font-weight:700 !important;
+  font-size:10.5px !important; font-weight:800 !important;
   color:#64748B !important; text-transform:uppercase !important;
-  letter-spacing:1px !important; padding:10px 16px !important;
+  letter-spacing:1.2px !important; padding:10px 16px !important;
   border-radius:0 !important; background:transparent !important;
   border-bottom:2px solid transparent !important; margin-bottom:-2px !important;
+  transition:color 0.15s !important;
 }
 .stTabs [aria-selected="true"]{
-  color:#0F172A !important;
-  border-bottom:2px solid #0F172A !important;
+  color:#0F172A !important; border-bottom:2px solid #0F172A !important;
 }
 
-/* ── Expander ───────────────────────────────────── */
+/* ── EXPANDER ────────────────────────────────────────── */
 div[data-testid="stExpander"]{
-  border:1px solid #E2E8F0 !important; border-radius:8px !important;
+  border:1px solid #E2E8F0 !important; border-radius:10px !important;
   background:#FFFFFF !important; box-shadow:0 1px 3px rgba(0,0,0,0.04) !important;
+  overflow:hidden !important;
 }
 
-/* ── Sidebar ────────────────────────────────────── */
+/* ── SIDEBAR ─────────────────────────────────────────── */
 section[data-testid="stSidebar"]{
-  background:#FFFFFF !important;
-  border-right:1px solid #E2E8F0 !important;
+  background:#FFFFFF !important; border-right:1px solid #E2E8F0 !important;
 }
 .sb-sec{
   font-size:9px; font-weight:800; color:#94A3B8;
   text-transform:uppercase; letter-spacing:2px;
-  margin:14px 0 7px; padding-top:12px;
-  border-top:1px solid #F1F5F9;
+  margin:14px 0 7px; padding-top:12px; border-top:1px solid #F1F5F9;
 }
 
-/* ── Dataframe ──────────────────────────────────── */
+/* ── DATAFRAME ───────────────────────────────────────── */
 [data-testid="stDataFrame"]{
-  border-radius:8px !important; overflow:hidden;
-  border:1px solid #E2E8F0;
+  border-radius:10px !important; overflow:hidden;
+  border:1px solid #E2E8F0; box-shadow:0 1px 3px rgba(0,0,0,0.04);
 }
 
-/* ── Scrollbar ──────────────────────────────────── */
+/* ── METRICS ─────────────────────────────────────────── */
+[data-testid="metric-container"]{
+  background:#FFFFFF; border:1px solid #E2E8F0;
+  border-radius:10px; padding:14px 16px;
+}
+
+/* ── SCROLLBAR ───────────────────────────────────────── */
 ::-webkit-scrollbar{width:5px;height:5px;}
 ::-webkit-scrollbar-track{background:#F8FAFC;}
 ::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:4px;}
 ::-webkit-scrollbar-thumb:hover{background:#94A3B8;}
 
-/* ── Metrics ────────────────────────────────────── */
-[data-testid="metric-container"]{
-  background:#FFFFFF; border:1px solid #E2E8F0;
-  border-radius:9px; padding:14px 16px;
+/* ── PROGRESS / SLIDER ───────────────────────────────── */
+.stProgress>div>div{
+  background:linear-gradient(90deg,#0F172A,#1E40AF) !important;
+  border-radius:4px !important;
 }
-
-/* ── Progress ───────────────────────────────────── */
-.stProgress>div>div{background:#0F172A !important;border-radius:4px !important;}
 .stSlider [data-baseweb="slider"] div{background:#0F172A !important;}
 
-/* ── Data status banner ─────────────────────────── */
+/* ── DATA BANNER ─────────────────────────────────────── */
 .data-banner-user{
-  background:linear-gradient(90deg,#F0FDF4,#DCFCE7);
-  border:1px solid #BBF7D0; border-radius:8px;
-  padding:9px 18px; margin-bottom:16px; font-size:12px;
-  color:#14532D; font-weight:500;
-  display:flex; align-items:center; justify-content:space-between;
+  background:linear-gradient(90deg,#F0FDF4,#DCFCE7,#F0FDF4);
+  background-size:200% 100%; animation:shimmer 3s ease-in-out infinite;
+  border:1px solid #BBF7D0; border-radius:10px;
+  padding:10px 20px; margin-bottom:18px; font-size:12px;
+  color:#14532D; font-weight:600; display:flex; align-items:center; gap:8px;
 }
 .data-banner-demo{
-  background:linear-gradient(90deg,#FFFBEB,#FEF3C7);
-  border:1px solid #FDE68A; border-radius:8px;
-  padding:9px 18px; margin-bottom:16px; font-size:12px;
-  color:#92400E; font-weight:500;
+  background:#FFFBEB; border:1px solid #FDE68A; border-radius:10px;
+  padding:10px 20px; margin-bottom:18px; font-size:12px; color:#92400E; font-weight:500;
 }
+@keyframes shimmer{
+  0%{background-position:200% 0} 100%{background-position:-200% 0}
+}
+
+/* ── FADE-IN ANIMATION ───────────────────────────────── */
+.stApp { animation: fadeIn 0.3s ease-in; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
 </style>
-"""
-# ═══════════════════════════════════════════════════════════════
+"""# ═══════════════════════════════════════════════════════════════
 # VOICE COMPONENT
 # ═══════════════════════════════════════════════════════════════
 def voice_component():
@@ -1614,7 +1742,7 @@ def voice_component():
         <button id="copy-btn" onclick="copyText()" style="display:none;background:#1B4F72;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">Copy to Chat</button>
         <button id="clear-btn" onclick="clearText()" style="display:none;background:#E74C3C;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">Clear</button>
       </div>
-      <div style="margin-top:10px;font-size:11px;color:#7F8C8D"> Click <b>Start Listening</b> → speak → <b>Copy to Chat</b> → paste below</div>
+      <div style="margin-top:10px;font-size:11px;color:#7F8C8D"> Click Start Listening, speak, then Copy to Chat and paste below</div>
     </div>
     <script>
     let isListening=false,ttsEnabled=true,recognition=null,finalText='';
@@ -1667,6 +1795,7 @@ for k,v in [("sc",None),("inv",None),("scores",None),("dispatch_log",[]),
             ("chat_history",[]),("ai_key",""),("ai_model",list(FREE_AI_MODELS.keys())[0]),
             ("last_ai_text",""),("wh_forecasts",None),("plant_req",None),
             ("user_data_loaded", False), ("_ff_cache", None), ("_ff_hash", None),
+            ("scenario_mgr", None), ("smart_table_df", None),
             ("_pending_save", False), ("_save_payload", None)]:
     if k not in st.session_state: st.session_state[k]=v
 
@@ -1676,6 +1805,7 @@ if not st.session_state.user_data_loaded:
     if st.session_state.inv is None:    st.session_state.inv=load_demo_inventory()
     if st.session_state.scores is None: st.session_state.scores=load_demo_scores()
 if st.session_state.forecaster is None: st.session_state.forecaster=DemandForecaster()
+if st.session_state.scenario_mgr is None: st.session_state.scenario_mgr=ScenarioManager()
 
 sc=st.session_state.sc; inv=st.session_state.inv
 
@@ -1781,7 +1911,7 @@ with st.sidebar:
             st.markdown('<div class="sb-sec">Connections</div>', unsafe_allow_html=True)
             for e in sc.edges:
                 c1,c2=st.columns([5,1])
-                c1.markdown(f"<span style='font-size:11px'><b>{sc.nodes[e.source].name}</b>→{sc.nodes[e.target].name} <span style='color:#7F8C8D'>({int(e.capacity)})</span></span>",unsafe_allow_html=True)
+                c1.markdown(f"<span style='font-size:11px'><b>{sc.nodes[e.source].name}</b>->{sc.nodes[e.target].name} <span style='color:#7F8C8D'>({int(e.capacity)})</span></span>",unsafe_allow_html=True)
                 if c2.button("X",key=f"de_{e.source}_{e.target}"): sc.remove_edge(e.source,e.target); st.rerun()
 
     with st_c:
@@ -1998,10 +2128,304 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════
 # MAIN TABS
 # ═══════════════════════════════════════════════════════════════
-T=st.tabs([" Network Map"," Inventory"," Disruption"," Risk Heatmap",
-           " Demand Forecast"," Dispatch Log"," ATP & Scorecard",
-           " Geographic View"," Reports"," AI Assistant"])
-t1,t2,t3,t4,t5,t6,t7,t8,t9,t10=T
+T=st.tabs(["Control Tower","Network Map","Smart Data","Inventory",
+           "Disruption","Risk Heatmap","Demand Forecast",
+           "Dispatch Log","ATP & Scorecard","Geographic View",
+           "Scenario Planning","Reports","AI Assistant"])
+t_ct,t1,t_smart,t2,t3,t4,t5,t6,t7,t8,t_scen,t9,t10=T
+
+
+# ─────────────────────────────────────────────────────────────
+# CONTROL TOWER — Premium operational dashboard
+# ─────────────────────────────────────────────────────────────
+with t_ct:
+    plants_ct=[n for n in sc.nodes.values() if n.node_type=="plant"]
+    whs_ct   =[n for n in sc.nodes.values() if n.node_type=="warehouse"]
+    dems_ct  =[n for n in sc.nodes.values() if n.node_type=="demand"]
+    alerts_ct=inv.get_alerts(sc.nodes)
+    crit_ct  =[a for a in alerts_ct if a["level"]=="critical"]
+    warn_ct  =[a for a in alerts_ct if a["level"]=="warning"]
+
+    # ── Top KPI strip ────────────────────────────────────────────
+    st.markdown('<div class="sh">Supply Chain Control Tower</div>',unsafe_allow_html=True)
+    k1,k2,k3,k4,k5,k6=st.columns(6)
+
+    total_cap_ct=sum(n.capacity for n in plants_ct)
+    total_dem_ct=sum(n.capacity for n in dems_ct)
+    cov_ct=round(total_cap_ct/max(total_dem_ct,1)*100,1)
+    cov_color="#1E40AF" if cov_ct>=100 else "#D97706" if cov_ct>=70 else "#DC2626"
+    active_dis_ct=len([d for d in st.session_state.dispatch_log if d.get("status")=="In Transit"])
+
+    for col, label, val, sub, color in [
+        (k1,"Nodes",len(sc.nodes),f"{len(plants_ct)} plants","#1E40AF"),
+        (k2,"Connections",len(sc.edges),f"{active_dis_ct} in transit","#0369A1"),
+        (k3,"Critical Alerts",len(crit_ct),"Needs immediate action","#DC2626"),
+        (k4,"Warnings",len(warn_ct),"Below reorder point","#D97706"),
+        (k5,"Supply Coverage",f"{cov_ct}%","vs total demand",cov_color),
+        (k6,"Demand Points",len(dems_ct),f"Total: {total_dem_ct:,.0f} units","#7C3AED"),
+    ]:
+        col.markdown(
+            f'<div class="kpi" style="border-top-color:{color}">'
+            f'<div class="kpi-lbl">{label}</div>'
+            f'<div class="kpi-val">{val}</div>'
+            f'<div class="kpi-sub">{sub}</div></div>',
+            unsafe_allow_html=True)
+
+    st.markdown("<br>",unsafe_allow_html=True)
+
+    # ── Live alerts feed ─────────────────────────────────────────
+    col_a, col_b = st.columns([1,2])
+    with col_a:
+        st.markdown('<div class="sh">Live Alerts</div>',unsafe_allow_html=True)
+        if not alerts_ct:
+            st.markdown('<div class="al-g"><span class="pulse-dot pulse-green"></span>All systems normal — no active alerts</div>',unsafe_allow_html=True)
+        for a in alerts_ct[:8]:
+            level_cls = "al-r" if a["level"]=="critical" else "al-a"
+            badge_cls = "b-r" if a["level"]=="critical" else "b-a"
+            badge_txt = "CRITICAL" if a["level"]=="critical" else "LOW"
+            st.markdown(
+                f'<div class="{level_cls}">'
+                f'<span class="{badge_cls}">{badge_txt}</span> '
+                f'<b>{a["node_name"]}</b> — {a["item_name"]}<br>'
+                f'<span style="font-size:11px;color:#64748B">Stock: {a["current"]:.0f} / Safety: {a["safety"]:.0f} · {a["coverage"]} days left</span>'
+                f'</div>',
+                unsafe_allow_html=True)
+
+    with col_b:
+        st.markdown('<div class="sh">Network Health Overview</div>',unsafe_allow_html=True)
+        # Fulfillment chart
+        ff_ct = st.session_state.get("_ff_cache")
+        if ff_ct is None:
+            if st.button("Compute Fulfillment",key="ct_ff_btn"):
+                with st.spinner("Computing..."):
+                    ff_ct = sc.demand_fulfillment()
+                    st.session_state["_ff_cache"]=ff_ct
+                    st.session_state["_ff_hash"]=_graph_hash(sc)
+                    st.rerun()
+            st.info("Click Compute Fulfillment to load the health overview.")
+        else:
+            names_ff=[sc.nodes[d].name for d in ff_ct]
+            pcts_ff=[ff_ct[d]["pct"] for d in ff_ct]
+            colors_ff=["#16A34A" if p>=90 else "#D97706" if p>=60 else "#DC2626" for p in pcts_ff]
+            fig_ct=go.Figure(go.Bar(
+                x=names_ff,y=pcts_ff,marker_color=colors_ff,
+                text=[f"{p:.0f}%" for p in pcts_ff],textposition="outside",
+                textfont=dict(size=10,color="#64748B")))
+            fig_ct.update_layout(
+                yaxis=dict(range=[0,115],title="Fulfillment %",gridcolor="#F1F5F9",tickfont=dict(color="#64748B")),
+                xaxis=dict(tickfont=dict(size=9,color="#64748B")),
+                paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",height=260,
+                margin=dict(l=10,r=10,t=10,b=10))
+            fig_ct.add_hline(y=100,line_dash="dot",line_color="#CBD5E1")
+            st.plotly_chart(fig_ct,use_container_width=True)
+
+    # ── Inventory status donut ────────────────────────────────────
+    st.markdown("<br>",unsafe_allow_html=True)
+    inv_c1, inv_c2, inv_c3 = st.columns(3)
+    with inv_c1:
+        st.markdown('<div class="sh">Stock Status Distribution</div>',unsafe_allow_html=True)
+        inv_df_ct=inv.to_df(sc.nodes)
+        if not inv_df_ct.empty:
+            sc_counts=inv_df_ct["Status"].value_counts()
+            fig_donut=go.Figure(go.Pie(
+                labels=sc_counts.index, values=sc_counts.values,
+                marker=dict(colors=["#16A34A" if s=="Normal" else "#D97706" if s=="Low" else "#DC2626" for s in sc_counts.index],
+                           line=dict(color="#FFFFFF",width=2)),
+                hole=0.55, textfont=dict(size=12)))
+            fig_donut.update_layout(paper_bgcolor="#FFFFFF",height=220,margin=dict(l=5,r=5,t=5,b=5),
+                legend=dict(font=dict(size=11,color="#64748B"),orientation="h",y=-0.1))
+            st.plotly_chart(fig_donut,use_container_width=True)
+    with inv_c2:
+        st.markdown('<div class="sh">Node Type Distribution</div>',unsafe_allow_html=True)
+        fig_node=go.Figure(go.Pie(
+            labels=["Plants","Warehouses","Demand Points"],
+            values=[len(plants_ct),len(whs_ct),len(dems_ct)],
+            marker=dict(colors=["#15803D","#1D4ED8","#B91C1C"],line=dict(color="#FFFFFF",width=2)),
+            hole=0.5,textfont=dict(size=12)))
+        fig_node.update_layout(paper_bgcolor="#FFFFFF",height=220,margin=dict(l=5,r=5,t=5,b=5),
+            legend=dict(font=dict(size=11,color="#64748B"),orientation="h",y=-0.1))
+        st.plotly_chart(fig_node,use_container_width=True)
+    with inv_c3:
+        st.markdown('<div class="sh">Dispatch Status</div>',unsafe_allow_html=True)
+        dl=st.session_state.dispatch_log or []
+        ds={"In Transit":len([d for d in dl if d.get("status")=="In Transit"]),
+            "Delivered":len([d for d in dl if d.get("status")=="Delivered"]),
+            "Delayed":len([d for d in dl if d.get("status")=="Delayed"])}
+        if any(v>0 for v in ds.values()):
+            fig_ds=go.Figure(go.Pie(
+                labels=list(ds.keys()),values=list(ds.values()),
+                marker=dict(colors=["#2563EB","#16A34A","#DC2626"],line=dict(color="#FFFFFF",width=2)),
+                hole=0.5,textfont=dict(size=12)))
+            fig_ds.update_layout(paper_bgcolor="#FFFFFF",height=220,margin=dict(l=5,r=5,t=5,b=5),
+                legend=dict(font=dict(size=11,color="#64748B"),orientation="h",y=-0.1))
+            st.plotly_chart(fig_ds,use_container_width=True)
+        else:
+            st.markdown('<div class="al-b" style="margin-top:40px;text-align:center">No dispatches logged yet</div>',unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# SMART DATA EXPLORER — SQL-like table with filter/sort/search
+# ─────────────────────────────────────────────────────────────
+with t_smart:
+    st.markdown('<div class="sh">Smart Data Explorer</div>',unsafe_allow_html=True)
+    st.caption("Upload any Excel or CSV file. Filter, sort, search, and analyse instantly — like a SQL table in your browser.")
+
+    # ── Dataset selector ─────────────────────────────────────────
+    data_src = st.radio(
+        "Select data source",
+        ["Network Nodes","Network Connections","Inventory","Dispatch Log","Upload Custom CSV/Excel"],
+        horizontal=True, key="smart_src")
+
+    smart_df = None
+    if data_src == "Network Nodes":
+        smart_df = pd.DataFrame([
+            {"ID":n.id,"Name":n.name,"Type":n.node_type.capitalize(),
+             "Capacity":n.capacity,"Location":n.location,"Longitude":n.x,"Latitude":n.y}
+            for n in sc.nodes.values()])
+    elif data_src == "Network Connections":
+        smart_df = pd.DataFrame([
+            {"Source":e.source,"Source Name":sc.nodes[e.source].name if e.source in sc.nodes else e.source,
+             "Target":e.target,"Target Name":sc.nodes[e.target].name if e.target in sc.nodes else e.target,
+             "Capacity":e.capacity,"Cost":e.cost,"Active":e.active}
+            for e in sc.edges])
+    elif data_src == "Inventory":
+        smart_df = inv.to_df(sc.nodes)
+    elif data_src == "Dispatch Log":
+        if st.session_state.dispatch_log:
+            smart_df = pd.DataFrame(st.session_state.dispatch_log)
+            smart_df = smart_df[[c for c in ["timestamp","from_node","to_node","item","quantity","status","notes"] if c in smart_df.columns]]
+        else:
+            st.info("No dispatches logged yet. Go to Dispatch Log tab to record some.")
+    elif data_src == "Upload Custom CSV/Excel":
+        ufile = st.file_uploader("Upload CSV or Excel",type=["csv","xlsx","xls"],key="smart_upload")
+        if ufile:
+            try:
+                if ufile.name.lower().endswith(".csv"):
+                    smart_df = pd.read_csv(ufile)
+                else:
+                    xls_smart = pd.ExcelFile(ufile)
+                    if len(xls_smart.sheet_names) > 1:
+                        sheet_choice = st.selectbox("Select sheet", xls_smart.sheet_names, key="smart_sheet")
+                        smart_df = pd.read_excel(xls_smart, sheet_choice)
+                    else:
+                        smart_df = pd.read_excel(xls_smart)
+                st.success(f"Loaded {len(smart_df):,} rows x {len(smart_df.columns)} columns")
+            except Exception as ex:
+                st.error(f"Load failed: {ex}")
+
+    if smart_df is not None and not smart_df.empty:
+        st.markdown("<br>",unsafe_allow_html=True)
+
+        # ── Toolbar ──────────────────────────────────────────────
+        tb1, tb2, tb3 = st.columns([3,2,1])
+        search_term = tb1.text_input("Search across all columns",placeholder="Type to filter rows...",key="smart_search",label_visibility="collapsed")
+        sort_col    = tb2.selectbox("Sort by column",["(none)"]+list(smart_df.columns),key="smart_sort",label_visibility="collapsed")
+        sort_asc    = tb3.selectbox("Order",["Ascending","Descending"],key="smart_order",label_visibility="collapsed")
+
+        # Column-level filters
+        with st.expander("Column Filters"):
+            filter_cols = st.multiselect("Add filter for column",smart_df.columns.tolist(),key="smart_fcols")
+            col_filters = {}
+            if filter_cols:
+                fcols = st.columns(min(len(filter_cols),3))
+                for i,fc in enumerate(filter_cols):
+                    unique_vals = smart_df[fc].dropna().unique().tolist()
+                    if len(unique_vals) <= 20:
+                        col_filters[fc] = fcols[i%3].multiselect(f"{fc}",unique_vals,default=unique_vals,key=f"sf_{fc}")
+                    else:
+                        col_filters[fc] = fcols[i%3].text_input(f"{fc} contains",key=f"sf_{fc}")
+
+        # Apply search
+        display_df = smart_df.copy()
+        if search_term:
+            mask = pd.Series([False]*len(display_df))
+            for col in display_df.columns:
+                mask = mask | display_df[col].astype(str).str.contains(search_term,case=False,na=False)
+            display_df = display_df[mask]
+
+        # Apply column filters
+        for fc, fval in col_filters.items():
+            if fval and fc in display_df.columns:
+                if isinstance(fval, list):
+                    display_df = display_df[display_df[fc].isin(fval)]
+                elif isinstance(fval, str) and fval:
+                    display_df = display_df[display_df[fc].astype(str).str.contains(fval,case=False,na=False)]
+
+        # Apply sort
+        if sort_col != "(none)":
+            display_df = display_df.sort_values(sort_col, ascending=(sort_asc=="Ascending"))
+
+        # ── Stats strip ──────────────────────────────────────────
+        s1,s2,s3,s4 = st.columns(4)
+        s1.metric("Total Rows", f"{len(smart_df):,}")
+        s2.metric("Filtered Rows", f"{len(display_df):,}")
+        s3.metric("Columns", len(display_df.columns))
+        num_cols = display_df.select_dtypes(include="number").columns.tolist()
+        s4.metric("Numeric Columns", len(num_cols))
+
+        # ── Data table ───────────────────────────────────────────
+        st.markdown('<div class="sh">Data Table</div>',unsafe_allow_html=True)
+        # Pagination
+        page_size = st.select_slider("Rows per page",[25,50,100,250,500,1000],value=100,key="smart_page")
+        total_pages = max(1, (len(display_df)-1)//page_size+1)
+        page_num = st.number_input("Page",min_value=1,max_value=total_pages,value=1,key="smart_pagenum")
+        start_idx = (page_num-1)*page_size
+        page_df = display_df.iloc[start_idx:start_idx+page_size]
+        st.caption(f"Showing rows {start_idx+1}–{min(start_idx+page_size,len(display_df))} of {len(display_df):,}")
+        st.dataframe(page_df, use_container_width=True, hide_index=True, height=400)
+
+        # ── Quick analytics ──────────────────────────────────────
+        if num_cols:
+            st.markdown("<br>",unsafe_allow_html=True)
+            st.markdown('<div class="sh">Quick Analytics</div>',unsafe_allow_html=True)
+            qa1, qa2 = st.columns(2)
+            sel_num = qa1.selectbox("Chart column (numeric)",num_cols,key="smart_num")
+            cat_cols = display_df.select_dtypes(exclude="number").columns.tolist()
+            chart_type = qa2.selectbox("Chart type",["Histogram","Bar (by category)","Box Plot","Line"],key="smart_ctype")
+
+            if chart_type == "Histogram":
+                fig_qa = go.Figure(go.Histogram(x=display_df[sel_num],
+                    marker_color="#1E40AF",opacity=0.85,nbinsx=30))
+                fig_qa.update_layout(paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",
+                    xaxis=dict(gridcolor="#F1F5F9"),yaxis=dict(gridcolor="#F1F5F9"),
+                    title=dict(text=f"Distribution of {sel_num}",font=dict(size=13,color="#0F172A"),x=0.5),
+                    height=300,margin=dict(l=10,r=10,t=36,b=10))
+            elif chart_type == "Bar (by category)" and cat_cols:
+                sel_cat = st.selectbox("Category column",cat_cols,key="smart_cat")
+                grp = display_df.groupby(sel_cat)[sel_num].mean().sort_values(ascending=False).head(20)
+                fig_qa = go.Figure(go.Bar(x=grp.index.tolist(),y=grp.values.tolist(),
+                    marker_color="#1E40AF",text=[f"{v:.1f}" for v in grp.values],textposition="outside"))
+                fig_qa.update_layout(paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",
+                    xaxis=dict(gridcolor="#F1F5F9"),yaxis=dict(gridcolor="#F1F5F9"),
+                    title=dict(text=f"Avg {sel_num} by {sel_cat}",font=dict(size=13,color="#0F172A"),x=0.5),
+                    height=300,margin=dict(l=10,r=10,t=36,b=10))
+            elif chart_type == "Box Plot":
+                fig_qa = go.Figure(go.Box(y=display_df[sel_num],
+                    marker_color="#1E40AF",boxmean=True,name=sel_num))
+                fig_qa.update_layout(paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",
+                    yaxis=dict(gridcolor="#F1F5F9"),
+                    title=dict(text=f"Box Plot — {sel_num}",font=dict(size=13,color="#0F172A"),x=0.5),
+                    height=300,margin=dict(l=10,r=10,t=36,b=10))
+            else:
+                fig_qa = go.Figure(go.Scatter(y=display_df[sel_num].tolist(),
+                    mode="lines",line=dict(color="#1E40AF",width=2)))
+                fig_qa.update_layout(paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",
+                    xaxis=dict(gridcolor="#F1F5F9"),yaxis=dict(gridcolor="#F1F5F9"),
+                    title=dict(text=f"Line — {sel_num}",font=dict(size=13,color="#0F172A"),x=0.5),
+                    height=300,margin=dict(l=10,r=10,t=36,b=10))
+            st.plotly_chart(fig_qa,use_container_width=True)
+
+            # Descriptive statistics
+            with st.expander("Descriptive Statistics"):
+                st.dataframe(display_df[num_cols].describe().round(2),use_container_width=True)
+
+        # ── Download filtered ────────────────────────────────────
+        st.download_button("Download Filtered Data as CSV",
+            display_df.to_csv(index=False),
+            f"smart_export_{data_src.replace(' ','_').lower()}.csv",
+            "text/csv", use_container_width=True, key="smart_dl")
+
+
 
 # ─────────────────────────────────────────────────────────────
 # TAB 1 — NETWORK MAP
@@ -2080,7 +2504,7 @@ with t1:
             res,transport_recs,total_dist,total_cost_est=st.session_state["last_path_result"]
             path=st.session_state.highlight_path
             pnames=[sc.nodes[n].name for n in path]
-            st.markdown(f'<div class="al-g">OK <b>Path:</b> {" → ".join(pnames)}</div>',unsafe_allow_html=True)
+            st.markdown(f'<div class="al-g">OK <b>Path:</b> {" -> ".join(pnames)}</div>',unsafe_allow_html=True)
 
             st.markdown('<div class="sh" style="margin-top:12px">Transport Recommendations</div>',unsafe_allow_html=True)
             if transport_recs:
@@ -2092,7 +2516,7 @@ with t1:
                     st.markdown(f"""
                     <div class="transport-card">
                       <div style="display:flex;justify-content:space-between;align-items:center">
-                        <div><b>{src_name} → {tgt_name}</b></div>
+                        <div><b>{src_name} -> {tgt_name}</b></div>
                         <div class="transport-mode">{tr['icon']} {tr['label']}</div>
                       </div>
                       <div class="transport-detail">
@@ -2153,7 +2577,7 @@ with t2:
     if not inv_df.empty:
         STC={"Normal":"#27AE60","Low":"#E67E22","Critical":"#E74C3C"}
         def cs(v): return f"color:{STC.get(v,'#2C3E50')};font-weight:700"
-        def cc2(v): return "background-color:#FADBD8" if v<=3 else "background-color:#FDEBD0" if v<=7 else "background-color:#D5F5E3"
+        def cc2(v): return "background-color:#FEE2E2" if v<=3 else "background-color:#FEF3C7" if v<=7 else "background-color:#DCFCE7"
         st.dataframe(inv_df.style.map(cs,subset=["Status"]).map(cc2,subset=["Coverage Days"]),use_container_width=True,hide_index=True)
 
     # Inventory overview charts
@@ -2243,7 +2667,7 @@ with t3:
     st.caption("Simulate a connection failure — see resilience score, alternate routes, and safety stock coverage.")
     if not sc.edges: st.info("Add connections to run disruption analysis.")
     else:
-        eopts={f"{sc.nodes[e.source].name} → {sc.nodes[e.target].name} (cap:{int(e.capacity)})":(e.source,e.target) for e in sc.edges}
+        eopts={f"{sc.nodes[e.source].name} -> {sc.nodes[e.target].name} (cap:{int(e.capacity)})":(e.source,e.target) for e in sc.edges}
         c1,c2=st.columns([4,1])
         chosen=c1.selectbox("Connection to disrupt",list(eopts.keys()),label_visibility="collapsed",key="dis_sel")
         c2.markdown("<br>",unsafe_allow_html=True)
@@ -2271,7 +2695,7 @@ with t3:
                         st.markdown(f"""<div style="display:flex;justify-content:space-between;align-items:center;
                           padding:7px 12px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;margin:3px 0;border-left:3px solid {sv2}">
                           <b style="font-size:13px">{imp['demand_name']}</b>
-                          <span style="font-size:12px;color:#5D6D7E">{imp['before_pct']}%→{imp['after_pct']}% | <b>−{imp['drop_pct']}%</b> | −{imp['lost_units']} units</span>
+                          <span style="font-size:12px;color:#5D6D7E">{imp['before_pct']}%->{imp['after_pct']}% | <b>−{imp['drop_pct']}%</b> | −{imp['lost_units']} units</span>
                           <span style="color:{sv2};font-size:11px;font-weight:700">{imp['severity'].upper()}</span></div>""",unsafe_allow_html=True)
 
             st.markdown("<br>",unsafe_allow_html=True)
@@ -2285,7 +2709,7 @@ with t3:
                     if paths:
                         st.markdown(f"<b>{sc.nodes[d_id].name}</b> — {len(paths)} alternate route(s):", unsafe_allow_html=True)
                         for i,p in enumerate(paths,1):
-                            st.markdown(f'<div class="card"><b>Route {i}</b> | Cost: {p["cost"]} | {" → ".join(p["path"])}</div>',unsafe_allow_html=True)
+                            st.markdown(f'<div class="card"><b>Route {i}</b> | Cost: {p["cost"]} | {" -> ".join(p["path"])}</div>',unsafe_allow_html=True)
             else:
                 st.markdown('<div class="al-r"><b>No alternate routes found</b> — This is a single point of failure!</div>',unsafe_allow_html=True)
 
@@ -2302,10 +2726,10 @@ with t3:
                     for alt in alts:
                         rows_s.append({"Source":alt["node_name"],"Item":inv.items[iid]["name"],
                             "Available":f"{alt['available']:.0f}","Covers":("OK Yes" if alt["can_cover"] else f"Partial {alt['coverage_pct']}%"),
-                            "Route":" → ".join(alt["path"]),"Cost":alt["route_cost"],"Coverage Days":alt.get("coverage_days","—")})
+                            "Route":" -> ".join(alt["path"]),"Cost":alt["route_cost"],"Coverage Days":alt.get("coverage_days","—")})
                 if rows_s:
                     df_s=pd.DataFrame(rows_s)
-                    def cov_s(v): return "background-color:#D5F5E3;font-weight:700" if "Yes" in str(v) else "background-color:#FDEBD0"
+                    def cov_s(v): return "background-color:#D5F5E3;font-weight:700" if "Yes" in str(v) else "background-color:#FEF3C7"
                     st.dataframe(df_s.style.map(cov_s,subset=["Covers"]),use_container_width=True,hide_index=True)
                 else:
                     st.markdown('<div class="al-a">No above-safety stock available.</div>',unsafe_allow_html=True)
@@ -2324,7 +2748,7 @@ with t3:
 
 
 # ─────────────────────────────────────────────────────────────
-# TAB 4 — RISK HEATMAP (Green → Red, proper colors)
+# TAB 4 — RISK HEATMAP (Green -> Red, proper colors)
 # ─────────────────────────────────────────────────────────────
 with t4:
     st.markdown('<div class="sh">Network Risk Heatmap</div>',unsafe_allow_html=True)
@@ -2394,7 +2818,7 @@ with t4:
 # ─────────────────────────────────────────────────────────────
 with t5:
     st.markdown('<div class="sh">AI-Powered Demand Forecasting</div>',unsafe_allow_html=True)
-    st.caption("RandomForest + GradientBoosting ensemble · Forecast → Warehouse → Plant propagation")
+    st.caption("RandomForest + GradientBoosting ensemble · Forecast -> Warehouse -> Plant propagation")
     fc=st.session_state.forecaster
     demand_nodes=[n for n in sc.nodes.values() if n.node_type=="demand"]
     if not demand_nodes: st.info("Add demand nodes to enable forecasting.")
@@ -2557,7 +2981,7 @@ with t7:
                     for i,a in enumerate(alts,1):
                         cls="al-g" if a["can_cover"] else "al-a"; bdg="b-g" if a["can_cover"] else "b-a"
                         can_txt = "Can Fulfill" if a["can_cover"] else f"Partial {a['coverage_pct']}%"
-                        route_txt = " → ".join(a["path"])
+                        route_txt = " -> ".join(a["path"])
                         st.markdown(f'<div class="{cls}"><b>Option {i}: {a["node_name"]}</b> <span class="{bdg}">{can_txt}</span><br>Available: <b>{a["available"]:.0f}</b> | Coverage: {a["coverage_days"]} days | Route: {route_txt} | Cost: {a["route_cost"]}</div>',unsafe_allow_html=True)
                 else:
                     st.markdown('<div class="al-r"><b>No nodes can fulfill this request</b> with current stock levels.</div>',unsafe_allow_html=True)
@@ -2632,6 +3056,88 @@ with t8:
         st.plotly_chart(draw_geo_map(sc,mscope.lower()),use_container_width=True)
         with st.expander(" Node Coordinates"):
             st.dataframe(pd.DataFrame([{"Node":n.name,"Type":n.node_type,"Lat":n.y,"Lon":n.x,"Location":n.location} for n in sc.nodes.values()]),use_container_width=True,hide_index=True)
+
+
+
+# ─────────────────────────────────────────────────────────────
+# SCENARIO PLANNING
+# ─────────────────────────────────────────────────────────────
+with t_scen:
+    st.markdown('<div class="sh">Scenario Planning — Compare Network Configurations</div>',unsafe_allow_html=True)
+    st.caption("Save the current supply chain as a named scenario. Compare multiple scenarios side-by-side to evaluate network changes.")
+
+    sm = st.session_state.scenario_mgr
+
+    # ── Save current scenario ─────────────────────────────────
+    st.markdown('<div class="sh">Save Current State as Scenario</div>',unsafe_allow_html=True)
+    sc_col1, sc_col2 = st.columns([3,1])
+    scen_name  = sc_col1.text_input("Scenario name",placeholder="e.g. Baseline 2025, Add WH Rajkot...",key="scen_name",label_visibility="collapsed")
+    scen_label = sc_col1.text_input("Description",placeholder="Optional description",key="scen_label",label_visibility="collapsed")
+    if sc_col2.button("Save Scenario",use_container_width=True,key="save_scen"):
+        if scen_name.strip():
+            sm.save(scen_name.strip(), sc, inv, scen_label.strip())
+            st.success(f"Scenario saved: {scen_name}")
+            st.rerun()
+        else:
+            st.error("Enter a scenario name")
+
+    # ── Saved scenarios ───────────────────────────────────────
+    if sm.scenarios:
+        st.markdown("<br>",unsafe_allow_html=True)
+        st.markdown('<div class="sh">Saved Scenarios</div>',unsafe_allow_html=True)
+        comp_df = sm.compare_df()
+        if not comp_df.empty:
+            def cov_col(v):
+                return f"background-color:#DCFCE7;color:#14532D;font-weight:700" if v>=100 else f"background-color:#FEF3C7;color:#92400E;font-weight:700" if v>=70 else f"background-color:#FEE2E2;color:#991B1B;font-weight:700"
+            st.dataframe(comp_df.style.map(cov_col,subset=["Coverage %"]),
+                use_container_width=True,hide_index=True)
+
+        # ── Side-by-side comparison chart ─────────────────────
+        st.markdown("<br>",unsafe_allow_html=True)
+        st.markdown('<div class="sh">Comparison Charts</div>',unsafe_allow_html=True)
+        ch1, ch2 = st.columns(2)
+
+        with ch1:
+            # Capacity vs Demand bar
+            scenarios = list(sm.scenarios.keys())
+            caps  = [sm.scenarios[s]["total_cap"] for s in scenarios]
+            dems  = [sm.scenarios[s]["total_dem"] for s in scenarios]
+            fig_sv = go.Figure()
+            fig_sv.add_trace(go.Bar(name="Plant Capacity",x=scenarios,y=caps,marker_color="#1E40AF"))
+            fig_sv.add_trace(go.Bar(name="Total Demand",  x=scenarios,y=dems,marker_color="#DC2626"))
+            fig_sv.update_layout(barmode="group",
+                title=dict(text="Capacity vs Demand",font=dict(size=12,color="#0F172A"),x=0.5),
+                paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",height=280,
+                yaxis=dict(gridcolor="#F1F5F9",title="Units"),
+                legend=dict(font=dict(size=11)),margin=dict(l=10,r=10,t=36,b=10))
+            st.plotly_chart(fig_sv,use_container_width=True)
+
+        with ch2:
+            # Coverage % radar-style
+            covs  = [sm.scenarios[s]["total_cap"]/max(sm.scenarios[s]["total_dem"],1)*100 for s in scenarios]
+            nodes = [sm.scenarios[s]["n_nodes"] for s in scenarios]
+            fig_sc2 = go.Figure()
+            colors = ["#1E40AF","#16A34A","#DC2626","#D97706","#7C3AED"]
+            for i,(sc_n,cov) in enumerate(zip(scenarios,covs)):
+                fig_sc2.add_trace(go.Bar(name=sc_n,x=["Coverage %"],y=[cov],
+                    marker_color=colors[i%len(colors)],
+                    text=[f"{cov:.1f}%"],textposition="outside"))
+            fig_sc2.update_layout(barmode="group",
+                title=dict(text="Supply Coverage %",font=dict(size=12,color="#0F172A"),x=0.5),
+                paper_bgcolor="#FFFFFF",plot_bgcolor="#FFFFFF",height=280,
+                yaxis=dict(gridcolor="#F1F5F9",range=[0,130],title="%"),
+                legend=dict(font=dict(size=11)),margin=dict(l=10,r=10,t=36,b=10))
+            fig_sc2.add_hline(y=100,line_dash="dot",line_color="#CBD5E1")
+            st.plotly_chart(fig_sc2,use_container_width=True)
+
+        # ── Delete scenario ────────────────────────────────────
+        st.markdown("<br>",unsafe_allow_html=True)
+        del_scen = st.selectbox("Delete scenario",["(select)"] + scenarios,key="del_scen")
+        if del_scen != "(select)":
+            if st.button(f"Delete: {del_scen}",key="del_scen_btn"):
+                del sm.scenarios[del_scen]; st.rerun()
+    else:
+        st.markdown('<div class="al-b">No scenarios saved yet. Configure your network and save it as a scenario above.</div>',unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2719,9 +3225,9 @@ with t10:
         This assistant uses <b>Groq</b> — completely free, no credit card needed!<br><br>
         <b>Steps:</b><br>
         1. Go to <a href="{GROQ_SIGNUP}" target="_blank"><b>console.groq.com</b></a><br>
-        2. Sign up free → API Keys → Create Key<br>
+        2. Sign up free -> API Keys -> Create Key<br>
         3. Copy key (starts with <code>gsk_</code>)<br>
-        4. Paste in sidebar → <b>AI Assistant Setup</b><br><br>
+        4. Paste in sidebar -> <b>AI Assistant Setup</b><br><br>
         <i>Models available: Llama 3.1 8B (fast) · Llama 3.3 70B (smart) · Gemma 2 9B</i>
         </div>""", unsafe_allow_html=True)
 
